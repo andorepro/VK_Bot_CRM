@@ -29,34 +29,32 @@ from contextlib import contextmanager
 import random
 import weakref
 
-# ==================== КОНФИГУРАЦИЯ ДЛЯ RASPBERRY PI ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'workshop.db')
-BACKUP_DIR = os.path.join(BASE_DIR, 'backups')
-STATIC_DIR = os.path.join(BASE_DIR, '../static')
-TEMPLATE_DIR = os.path.join(BASE_DIR, '../templates')
-SECRET_KEY = 'laser_workshop_rpi_secret_key_2026_change_this'
-VK_TOKEN = 'YOUR_VK_TOKEN_HERE'
-VK_GROUP_ID = 'YOUR_GROUP_ID'
-YOOKASSA_SECRET = 'YOUR_YOOKASSA_SECRET'
-CDEK_API_KEY = 'YOUR_CDEK_API_KEY'
-
-# Оптимизация для RPi: уменьшенные параметры
-MAX_CONNECTIONS = 5
-CACHE_TTL = 180
-MAX_USER_STATES = 500
-THREAD_POOL_SIZE = 2
-
-# Флаг AI прогнозов - отключено для экономии ресурсов RPi
-AI_PROGNOSIS_ENABLED = False
+# ==================== ЗАГРУЗКА КОНФИГУРАЦИИ ====================
+from config import config
 
 # ==================== ИНИЦИАЛИЗАЦИЯ FLASK ====================
 app = Flask(__name__, 
-            static_folder=STATIC_DIR, 
-            template_folder=TEMPLATE_DIR,
+            static_folder=config.BASE_DIR + '/../static' if hasattr(config, 'BASE_DIR') else os.path.join(os.path.dirname(os.path.abspath(__file__)), '../static'), 
+            template_folder=config.BASE_DIR + '/../templates' if hasattr(config, 'BASE_DIR') else os.path.join(os.path.dirname(os.path.abspath(__file__)), '../templates'),
             static_url_path='/static')
-app.secret_key = SECRET_KEY
+app.secret_key = config.SECRET_KEY
+app.debug = config.DEBUG_MODE
 app.config['JSON_AS_ASCII'] = False
+
+# Глобальные переменные из конфигурации
+BASE_DIR = config.BASE_DIR
+DB_PATH = config.DB_PATH
+BACKUP_DIR = config.DB_BACKUP_DIR
+SECRET_KEY = config.SECRET_KEY
+VK_TOKEN = config.VK_TOKEN
+VK_GROUP_ID = config.VK_GROUP_ID
+
+# Оптимизация для RPi из конфигурации
+MAX_CONNECTIONS = config.MAX_CONNECTIONS
+CACHE_TTL = config.CACHE_TTL
+MAX_USER_STATES = config.MAX_USER_STATES
+THREAD_POOL_SIZE = config.THREAD_POOL_SIZE
+AI_PROGNOSIS_ENABLED = config.AI_PROGNOSIS
 
 # ==================== ОПТИМИЗИРОВАННЫЙ ПУЛ СОЕДИНЕНИЙ ====================
 class ConnectionPool:

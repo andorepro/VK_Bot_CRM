@@ -16,24 +16,28 @@ from functools import wraps
 from threading import Thread
 import time
 
-# ==================== КОНФИГУРАЦИЯ (ОПТИМИЗАЦИЯ ДЛЯ PC) ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'workshop.db')
-BACKUP_DIR = os.path.join(BASE_DIR, 'backups')
-SECRET_KEY = 'laser_workshop_secret_key_2026_change_this'
-VK_TOKEN = 'YOUR_VK_TOKEN_HERE'  # Замените на ваш токен VK
-VK_GROUP_ID = 'YOUR_GROUP_ID'    # Замените на ID группы
-
-# Оптимизация для быстрого запуска на PC
-MAX_CONNECTIONS = 10
-THREAD_POOL_SIZE = 5
-CACHE_SIZE = 64 * 1024 * 1024  # 64MB
-AI_PROGNOSIS = True  # Включено для PC
-DEBUG_MODE = True
+# ==================== ЗАГРУЗКА КОНФИГУРАЦИИ ====================
+from config import config
 
 # ==================== ИНИЦИАЛИЗАЦИЯ FLASK ====================
 app = Flask(__name__)
-app.secret_key = SECRET_KEY
+app.secret_key = config.SECRET_KEY
+app.debug = config.DEBUG_MODE
+
+# Глобальные переменные из конфигурации
+BASE_DIR = config.BASE_DIR
+DB_PATH = config.DB_PATH
+BACKUP_DIR = config.DB_BACKUP_DIR
+SECRET_KEY = config.SECRET_KEY
+VK_TOKEN = config.VK_TOKEN
+VK_GROUP_ID = config.VK_GROUP_ID
+
+# Оптимизация для быстрого запуска на PC
+MAX_CONNECTIONS = config.MAX_CONNECTIONS
+THREAD_POOL_SIZE = config.THREAD_POOL_SIZE
+CACHE_SIZE = config.CACHE_SIZE
+AI_PROGNOSIS = config.AI_PROGNOSIS
+DEBUG_MODE = config.DEBUG_MODE
 
 # ==================== БАЗА ДАННЫХ (ОПТИМИЗИРОВАНО) ====================
 # Пул соединений для быстрого доступа
