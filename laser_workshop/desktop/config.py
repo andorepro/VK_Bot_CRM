@@ -14,6 +14,17 @@ class Config:
     HOST = os.getenv('HOST', '0.0.0.0')
     PORT = int(os.getenv('PORT', '5000'))
     
+    # HTTPS/SSL настройки
+    USE_HTTPS = os.getenv('USE_HTTPS', 'False').lower() in ('true', '1', 'yes')
+    CERT_FILE = os.getenv('CERT_FILE', 'certs/server.crt')
+    KEY_FILE = os.getenv('KEY_FILE', 'certs/server.key')
+    
+    # Полные пути к сертификатам
+    if not os.path.isabs(CERT_FILE):
+        CERT_FILE = os.path.join(BASE_DIR, CERT_FILE)
+    if not os.path.isabs(KEY_FILE):
+        KEY_FILE = os.path.join(BASE_DIR, KEY_FILE)
+    
     # База данных
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DB_NAME = os.getenv('DB_NAME', 'workshop.db')

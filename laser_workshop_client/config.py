@@ -14,10 +14,28 @@ class ClientConfig:
     HOST = os.getenv('HOST', '0.0.0.0')
     PORT = int(os.getenv('PORT', '5001'))  # Клиент на другом порту
     
+    # HTTPS/SSL настройки
+    USE_HTTPS = os.getenv('USE_HTTPS', 'False').lower() in ('true', '1', 'yes')
+    CERT_FILE = os.getenv('CERT_FILE', 'certs/client.crt')
+    KEY_FILE = os.getenv('KEY_FILE', 'certs/client.key')
+    
+    # Настройки SSL для подключения к серверу
+    VERIFY_SERVER_SSL = os.getenv('VERIFY_SERVER_SSL', 'False').lower() in ('true', '1', 'yes')
+    SERVER_CA_CERT = os.getenv('SERVER_CA_CERT', 'certs/server.crt')
+    
+    # Полные пути к сертификатам
+    if not os.path.isabs(CERT_FILE):
+        CERT_FILE = os.path.join(BASE_DIR, CERT_FILE)
+    if not os.path.isabs(KEY_FILE):
+        KEY_FILE = os.path.join(BASE_DIR, KEY_FILE)
+    if not os.path.isabs(SERVER_CA_CERT):
+        SERVER_CA_CERT = os.path.join(BASE_DIR, SERVER_CA_CERT)
+    
     # Настройки сервера (RPi)
     SERVER_HOST = os.getenv('SERVER_HOST', '192.168.1.100')  # IP адрес Raspberry Pi
     SERVER_PORT = int(os.getenv('SERVER_PORT', '5000'))      # Порт сервера на RPi
     SERVER_URL = os.getenv('SERVER_URL', '')  # Полный URL, если задан
+    SERVER_PROTOCOL = os.getenv('SERVER_PROTOCOL', 'https') if USE_HTTPS else os.getenv('SERVER_PROTOCOL', 'http')
     
     # База данных (локальный кэш)
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +69,8 @@ class ClientConfig:
         """Получение URL сервера"""
         if cls.SERVER_URL:
             return cls.SERVER_URL
-        return f"http://{cls.SERVER_HOST}:{cls.SERVER_PORT}"
+        protocol = cls.SERVER_PROTOCOL if hasattr(cls, 'SERVER_PROTOCOL') else 'http'
+        return f"{protocol}://{cls.SERVER_HOST}:{cls.SERVER_PORT}"
     
     @classmethod
     def is_offline_mode(cls):

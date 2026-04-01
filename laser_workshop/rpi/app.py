@@ -473,13 +473,20 @@ def get_current_user(current_user):
 
 if __name__ == '__main__':
     print("🔬 Лазерная Мастерская CRM (RPi Optimized)")
-    print(f"📊 MAX_CONNECTIONS: {MAX_CONNECTIONS}")
-    print(f"⚡ THREAD_POOL_SIZE: {THREAD_POOL_SIZE}")
-    print(f"💾 CACHE_TTL: {CACHE_TTL}s")
-    print(f"🤖 AI_PROGNOSIS: {'Enabled' if AI_PROGNOSIS_ENABLED else 'Disabled'}")
+    print(f"📊 MAX_CONNECTIONS: {config.MAX_CONNECTIONS}")
+    print(f"⚡ THREAD_POOL_SIZE: {config.THREAD_POOL_SIZE}")
+    print(f"💾 CACHE_TTL: {config.CACHE_TTL}s")
+    print(f"🤖 AI_PROGNOSIS: {'Enabled' if config.AI_PROGNOSIS else 'Disabled'}")
+    print(f"🔒 HTTPS: {'Enabled' if config.USE_HTTPS else 'Disabled'}")
     print("=" * 50)
     
     init_db()
     
     # Запуск на всех интерфейсах для доступа из сети
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    if config.USE_HTTPS:
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=config.CERT_FILE, keyfile=config.KEY_FILE)
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True, ssl_context=context)
+    else:
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)

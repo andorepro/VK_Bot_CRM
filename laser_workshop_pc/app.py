@@ -560,12 +560,17 @@ def export_csv():
 
 # ==================== ЗАПУСК (ОПТИМИЗИРОВАН) ====================
 if __name__ == '__main__':
-    # Предварительное создание пула соединений для быстрого старта
-    _precreate_connections()
-    print(f"✅ Пул соединений создан: {MAX_CONNECTIONS} соединений")
+    print("=" * 50)
+    print("🚀 Laser Workshop Application Starting...")
+    print(f"🔒 HTTPS: {'Enabled' if config.USE_HTTPS else 'Disabled'}")
+    print(f"🌐 Host: {config.HOST}")
+    print(f"🔌 Port: {config.PORT}")
+    print("=" * 50)
     
-    init_db()
-    print("🚀 Сервер запущен на http://localhost:5000")
-    print("📊 Логин: admin | Пароль: admin123")
-    print(f"⚡ Оптимизация: THREAD_POOL={THREAD_POOL_SIZE}, CACHE={CACHE_SIZE//1024//1024}MB, AI={'ON' if AI_PROGNOSIS else 'OFF'}")
-    app.run(host='0.0.0.0', port=5000, debug=DEBUG_MODE, threaded=True)
+    if config.USE_HTTPS:
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=config.CERT_FILE, keyfile=config.KEY_FILE)
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True, ssl_context=context)
+    else:
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
