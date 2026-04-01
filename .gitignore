@@ -1,1 +1,32 @@
-Nothing needs to be added to .gitignore since the changes only include Python source files (.py) which are legitimate source code files that should be tracked in version control.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Tests
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dependencies
+.venv/
+venv/
+.mypy_cache/
+```
