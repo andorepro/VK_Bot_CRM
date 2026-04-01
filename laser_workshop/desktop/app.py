@@ -565,23 +565,17 @@ def get_stats(current_user):
         })
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🔬 Лазерная Мастерская CRM (Desktop Full Version)")
-    print("=" * 60)
-    print(f"💻 Platform: Windows Desktop")
-    print(f"📊 MAX_CONNECTIONS: {MAX_CONNECTIONS}")
-    print(f"⚡ THREAD_POOL_SIZE: {THREAD_POOL_SIZE}")
-    print(f"💾 CACHE_TTL: {CACHE_TTL}s")
-    print(f"🤖 AI_PROGNOSIS: {'Enabled' if AI_PROGNOSIS_ENABLED else 'Disabled'}")
-    print(f"🐛 DEBUG_MODE: {DEBUG_MODE}")
-    print("=" * 60)
+    print("=" * 50)
+    print("🚀 Laser Workshop Application Starting...")
+    print(f"🔒 HTTPS: {'Enabled' if config.USE_HTTPS else 'Disabled'}")
+    print(f"🌐 Host: {config.HOST}")
+    print(f"🔌 Port: {config.PORT}")
+    print("=" * 50)
     
-    init_db()
-    
-    print("\n🌐 Запуск сервера...")
-    print("📍 Локальный доступ: http://localhost:5000")
-    print("🔑 Логин: admin | Пароль: admin123")
-    print("=" * 60)
-    
-    # Запуск с отладкой для Desktop
-    app.run(host='0.0.0.0', port=5000, debug=DEBUG_MODE, threaded=True)
+    if config.USE_HTTPS:
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=config.CERT_FILE, keyfile=config.KEY_FILE)
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True, ssl_context=context)
+    else:
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)

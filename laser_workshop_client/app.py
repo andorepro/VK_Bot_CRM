@@ -396,16 +396,17 @@ self.addEventListener('fetch', event => {
     return app.response_class(sw_content, mimetype='application/javascript')
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🔬 ЛАЗЕРНАЯ МАСТЕРСКАЯ CRM - КЛИЕНТ")
-    print("=" * 60)
-    print(f"📡 Сервер: {SERVER_URL}")
-    print(f"🌐 Порт клиента: {config.PORT}")
-    print(f"💾 Локальный кэш: {DB_PATH}")
-    print(f"🔄 Авто-синхронизация: {AUTO_SYNC} (интервал: {SYNC_INTERVAL}с)")
-    print(f"📴 Офлайн режим: {OFFLINE_MODE}")
-    print("=" * 60)
+    print("=" * 50)
+    print("🚀 Laser Workshop Application Starting...")
+    print(f"🔒 HTTPS: {'Enabled' if config.USE_HTTPS else 'Disabled'}")
+    print(f"🌐 Host: {config.HOST}")
+    print(f"🔌 Port: {config.PORT}")
+    print("=" * 50)
     
-    init_local_db()
-    
-    app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG_MODE, threaded=True)
+    if config.USE_HTTPS:
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=config.CERT_FILE, keyfile=config.KEY_FILE)
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True, ssl_context=context)
+    else:
+        app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
