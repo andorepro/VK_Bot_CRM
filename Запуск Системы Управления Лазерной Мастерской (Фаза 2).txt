@@ -1,0 +1,499 @@
+# 🚀 Запуск Системы Управления Лазерной Мастерской (Фаза 2)
+
+## 📋 Обзор новых функций Фазы 2
+
+| Функция | Описание |
+|---------|----------|
+| **Промокоды** | Создание, валидация, учёт использования |
+| **Календарь заказов** | Визуальное планирование по дням |
+| **LTV клиентов** | Сегментация (VIP/Regular/Loyal/New) |
+| **Расширенная аналитика** | Услуги, сегменты, топ клиентов |
+| **Уведомления** | PROCESSING + DONE статусы |
+| **Плановые даты** | Планирование готовности заказов |
+
+---
+
+## 🍓 ВАРИАНТ 1: Запуск на Raspberry Pi 3 B+
+
+### 1.1 Подготовка системы
+
+```bash
+# Обновление системы
+sudo apt update && sudo apt upgrade -y
+
+# Установка Python 3 и зависимостей
+sudo apt install -y python3 python3-pip python3-venv git
+
+# Создание директории проекта
+mkdir -p ~/laser-workshop-phase2
+cd ~/laser-workshop-phase2
+
+# Создание виртуального окружения
+python3 -m venv venv
+source venv/bin/activate
+
+# Установка зависимостей
+pip install flask pyjwt requests
+```
+
+### 1.2 Размещение файлов
+
+```bash
+# Структура проекта
+laser-workshop-phase2/
+├── app.py                    # Flask сервер (Фаза 2)
+├── bot_worker.py             # VK бот (Фаза 2)
+├── templates/
+│   └── index.html           # Web-интерфейс (Фаза 2)
+├── backups/                  # Папка для бэкапов (создаётся автоматически)
+└── venv/                     # Виртуальное окружение
+```
+
+### 1.3 Настройка VK API
+
+```bash
+# Редактирование app.py
+nano app.py
+
+# Заменить строки:
+VK_TOKEN = 'YOUR_VK_TOKEN_HERE'      # → Ваш токен VK
+VK_GROUP_ID = 'YOUR_GROUP_ID'        # → ID вашей группы
+```
+
+**Получение токена VK:**
+1. Зайдите на https://vk.com/dev
+2. Создайте Standalone-приложение
+3. Получите Access Token с правами: `messages`, `offline`
+4. ID группы: https://vk.com/clubXXXXXXXXX (число после club)
+
+### 1.4 Настройка автозапуска (systemd)
+
+```bash
+# Создание сервиса для Flask
+sudo nano /etc/systemd/system/laser-workshop.service
+```
+
+```ini
+[Unit]
+Description=Laser Workshop CRM Phase 2
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/laser-workshop-phase2
+Environment="PATH=/home/pi/laser-workshop-phase2/venv/bin"
+ExecStart=/home/pi/laser-workshop-phase2/venv/bin/python3 app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Создание сервиса для бота
+sudo nano /etc/systemd/system/laser-bot.service
+```
+
+```ini
+[Unit]
+Description=Laser Workshop VK Bot Phase 2
+After=network.target laser-workshop.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/laser-workshop-phase2
+Environment="PATH=/home/pi/laser-workshop-phase2/venv/bin"
+ExecStart=/home/pi/laser-workshop-phase2/venv/bin/python3 bot_worker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Включение сервисов
+sudo systemctl daemon-reload
+sudo systemctl enable laser-workshop.service
+sudo systemctl enable laser-bot.service
+sudo systemctl start laser-workshop.service
+sudo systemctl start laser-bot.service
+
+# Проверка статуса
+sudo systemctl status laser-workshop.service
+sudo systemctl status laser-bot.service
+```
+
+### 1.5 Настройка сети
+
+```bash
+# Узнать IP адрес
+hostname -I
+
+# Настройка статического IP (опционально)
+sudo nano /etc/dhcpcd.conf
+```
+
+```ini
+interface eth0
+static ip_address=192.168.1.100/24
+static routers=192.168.1.1
+static domain_name_servers=8.8.8.8 1.1.1.1
+```
+
+```bash
+sudo systemctl restart dhcpcd
+```
+
+---
+
+## 🪟 ВАРИАНТ 2: Запуск на Windows Desktop
+
+### 2.1 Установка Python
+
+```powershell
+# Скачать Python 3.11+ с https://python.org
+# При установке勾选 "Add Python to PATH"
+
+# Проверка установки
+python --version
+pip --version
+```
+
+### 2.2 Установка проекта
+
+```powershell
+# Создание директории
+mkdir C:\laser-workshop-phase2
+cd C:\laser-workshop-phase2
+
+# Создание виртуального окружения
+python -m venv venv
+
+# Активация виртуального окружения
+.\venv\Scripts\Activate.ps1
+
+# Установка зависимостей
+pip install flask pyjwt requests
+```
+
+### 2.3 Размещение файлов
+
+```
+C:\laser-workshop-phase2\
+├── app.py
+├── bot_worker.py
+├── templates\
+│   └── index.html
+├── backups\
+└── venv\
+```
+
+### 2.4 Настройка VK API
+
+```powershell
+# Отредактировать app.py и bot_worker.py
+# Заменить:
+VK_TOKEN = 'YOUR_VK_TOKEN_HERE'
+VK_GROUP_ID = 'YOUR_GROUP_ID'
+```
+
+### 2.5 Автозапуск на Windows
+
+```powershell
+# Создание batch-файла
+notepad start_workshop.bat
+```
+
+```batch
+@echo off
+cd /d C:\laser-workshop-phase2
+call venv\Scripts\activate.bat
+start "Laser Workshop" python app.py
+start "VK Bot" python bot_worker.py
+```
+
+```powershell
+# Добавление в автозагрузку
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\LaserWorkshop.lnk")
+$Shortcut.TargetPath = "C:\laser-workshop-phase2\start_workshop.bat"
+$Shortcut.Save()
+```
+
+### 2.6 Настройка брандмауэра
+
+```powershell
+# Разрешение порта 5000
+New-NetFirewallRule -DisplayName "Laser Workshop" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
+```
+
+---
+
+## 🎯 ЗАПУСК СИСТЕМЫ
+
+### Raspberry Pi
+
+```bash
+# Ручной запуск (для тестирования)
+cd ~/laser-workshop-phase2
+source venv/bin/activate
+python app.py
+# В отдельном окне:
+python bot_worker.py
+
+# Через systemd (production)
+sudo systemctl start laser-workshop.service
+sudo systemctl start laser-bot.service
+```
+
+### Windows
+
+```powershell
+# Ручной запуск
+cd C:\laser-workshop-phase2
+.\venv\Scripts\Activate.ps1
+python app.py
+# В отдельном окне:
+python bot_worker.py
+
+# Или через batch-файл
+.\start_workshop.bat
+```
+
+---
+
+## 🌐 ДОСТУП К СИСТЕМЕ
+
+| Платформа | URL |
+|-----------|-----|
+| **Локально** | http://localhost:5000 |
+| **В сети (Pi)** | http://192.168.1.100:5000 |
+| **В сети (Windows)** | http://[ВАШ_IP]:5000 |
+
+**Учётные данные:**
+- Логин: `admin`
+- Пароль: `admin123`
+
+---
+
+## ✅ ПРОВЕРКА РАБОТОСПОСОБНОСТИ
+
+### Тест API
+
+```bash
+# Raspberry Pi
+curl http://localhost:5000/api/price_list
+
+# Windows PowerShell
+Invoke-WebRequest http://localhost:5000/api/price_list
+```
+
+### Проверка сервисов (Pi)
+
+```bash
+sudo systemctl status laser-workshop.service
+sudo systemctl status laser-bot.service
+sudo journalctl -u laser-workshop.service -n 50
+```
+
+### Проверка процессов (Windows)
+
+```powershell
+tasklist | findstr python
+netstat -an | findstr 5000
+```
+
+---
+
+## 📊 НОВЫЕ API ENDPOINTS (Фаза 2)
+
+| Endpoint | Метод | Описание |
+|----------|-------|----------|
+| `/api/calendar` | GET | Календарь заказов по месяцам |
+| `/api/promo/validate` | POST | Валидация промокода |
+| `/api/promo/list` | GET | Список промокодов |
+| `/api/promo/create` | POST | Создание промокода (admin) |
+| `/api/analytics/services` | GET | Аналитика по услугам |
+| `/api/analytics/segments` | GET | Аналитика по сегментам |
+| `/api/client/<id>` | GET | Детали клиента с историей |
+
+---
+
+## 🔧 МОНИТОРИНГ И ОБСЛУЖИВАНИЕ
+
+### Raspberry Pi
+
+```bash
+# Просмотр логов
+sudo journalctl -u laser-workshop.service -f
+sudo journalctl -u laser-bot.service -f
+
+# Перезапуск сервисов
+sudo systemctl restart laser-workshop.service
+sudo systemctl restart laser-bot.service
+
+# Остановка
+sudo systemctl stop laser-workshop.service
+sudo systemctl stop laser-bot.service
+
+# Мониторинг ресурсов
+top -bn1 | grep "Cpu(s)"
+free -h
+df -h /
+vcgencmd measure_temp
+```
+
+### Windows
+
+```powershell
+# Просмотр процессов
+Get-Process python
+
+# Остановка
+taskkill /F /IM python.exe
+
+# Перезапуск
+.\start_workshop.bat
+```
+
+---
+
+## 💾 РЕЗЕРВНОЕ КОПИРОВАНИЕ
+
+### Автоматический бэкап (Pi)
+
+```bash
+# Cron job для ежедневного бэкапа
+crontab -e
+
+# Добавить строку (бэкап в 3:00 ночи)
+0 3 * * * /home/pi/laser-workshop-phase2/venv/bin/python3 -c "import shutil; import datetime; shutil.copy('/home/pi/laser-workshop-phase2/workshop.db', '/home/pi/laser-workshop-phase2/backups/backup_' + datetime.datetime.now().strftime('%Y%m%d') + '.db')"
+```
+
+### Ручной бэкап
+
+```bash
+# Raspberry Pi
+cd ~/laser-workshop-phase2
+cp workshop.db backups/workshop_backup_$(date +%Y%m%d_%H%M%S).db
+
+# Windows
+copy C:\laser-workshop-phase2\workshop.db C:\laser-workshop-phase2\backups\workshop_backup_%date:~-4,4%%date:~-7,2%%date:~-10,2%.db
+```
+
+### Через Web-интерфейс
+
+1. Войти в систему
+2. Нажать кнопку **"💾 Бэкап"**
+3. Файл скачается автоматически
+
+---
+
+## ⚠️ РЕШЕНИЕ ПРОБЛЕМ
+
+| Проблема | Решение |
+|----------|---------|
+| **Port 5000 занят** | Изменить порт в `app.run(port=5001)` |
+| **VK бот не работает** | Проверить токен и права доступа |
+| **БД не создаётся** | Проверить права на запись в папку |
+| **Нет доступа из сети** | Проверить брандмауэр и IP |
+| **Промокоды не работают** | Проверить таблицу `promo_codes` в БД |
+| **Календарь пустой** | Добавить заказы с `planned_date` |
+
+### Диагностика БД
+
+```bash
+# Raspberry Pi
+sqlite3 workshop.db ".tables"
+sqlite3 workshop.db "SELECT * FROM promo_codes;"
+
+# Windows
+.\venv\Scripts\python.exe
+>>> import sqlite3
+>>> conn = sqlite3.connect('workshop.db')
+>>> conn.execute("SELECT * FROM promo_codes").fetchall()
+```
+
+### Восстановление БД
+
+```bash
+# Raspberry Pi
+cd ~/laser-workshop-phase2
+cp backups/workshop_backup_YYYYMMDD.db workshop.db
+sudo systemctl restart laser-workshop.service
+
+# Windows
+cd C:\laser-workshop-phase2
+copy backups\workshop_backup_YYYYMMDD.db workshop.db
+# Перезапустить сервисы
+```
+
+---
+
+## 📈 ОЖИДАЕМАЯ ПРОИЗВОДИТЕЛЬНОСТЬ
+
+| Метрика | Raspberry Pi 3 B+ | Windows Desktop |
+|---------|------------------|-----------------|
+| **Запуск сервера** | ~5 секунд | ~2 секунды |
+| **Использование RAM** | ~150-200 MB | ~100-150 MB |
+| **Отклик API** | ~50-100 ms | ~20-50 ms |
+| **Одновременных клиентов** | до 10 | до 50+ |
+| **Бот (сообщения/мин)** | ~20-30 | ~50-100 |
+
+---
+
+## ✅ ЧЕК-ЛИСТ ЗАПУСКА ФАЗЫ 2
+
+### Обязательные шаги
+- [ ] Python 3 установлен
+- [ ] Виртуальное окружение создано
+- [ ] Зависимости установлены (`flask pyjwt requests`)
+- [ ] Файлы Phase 2 скопированы
+- [ ] VK токен настроен в `app.py` и `bot_worker.py`
+- [ ] Папка `templates/` создана
+- [ ] Порт 5000 открыт в брандмауэре
+
+### Опциональные шаги
+- [ ] systemd сервисы настроены (Pi)
+- [ ] Автозапуск настроен (Windows)
+- [ ] Статический IP настроен
+- [ ] Cron бэкапы настроены
+- [ ] Мониторинг ресурсов настроен
+
+### Проверка после запуска
+- [ ] Web-интерфейс открывается
+- [ ] Логин/пароль работают
+- [ ] VK бот отвечает на сообщения
+- [ ] Промокоды создаются
+- [ ] Календарь отображает заказы
+- [ ] Аналитика показывает данные
+
+---
+
+## 🎯 ГОТОВО К РАБОТЕ!
+
+```bash
+# Финальная проверка
+curl http://localhost:5000/api/analytics/summary
+```
+
+**Доступ к панели:**
+- URL: `http://localhost:5000` (или IP в сети)
+- Логин: `admin`
+- Пароль: `admin123`
+
+**Система Фаза 2 готова к production-использованию!** 🚀
+
+---
+
+## 📞 ПОДДЕРЖКА
+
+При возникновении проблем:
+1. Проверьте логи сервисов
+2. Убедитесь что VK токен действителен
+3. Проверьте права доступа к папкам
+4. Восстановите БД из бэкапа при необходимости
