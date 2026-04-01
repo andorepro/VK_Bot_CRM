@@ -42,10 +42,10 @@ YOOKASSA_SECRET = 'YOUR_YOOKASSA_SECRET'
 CDEK_API_KEY = 'YOUR_CDEK_API_KEY'
 
 # Оптимизация для RPi: уменьшенные параметры
-MAX_CONNECTIONS = 5  # Было 10
-CACHE_TTL = 180  # 3 минуты (было 5)
-MAX_USER_STATES = 500  # Было 1000
-THREAD_POOL_SIZE = 2  # Было 5
+MAX_CONNECTIONS = 5
+CACHE_TTL = 180
+MAX_USER_STATES = 500
+THREAD_POOL_SIZE = 2
 
 # Флаг AI прогнозов - отключено для экономии ресурсов RPi
 AI_PROGNOSIS_ENABLED = False
@@ -66,18 +66,29 @@ class ConnectionPool:
         self._pool = []
         self._lock = Lock()
         self._initialized = False
+        # Предварительное создание всех соединений для быстрого старта
+        self._precreate_connections()
     
     def _create_connection(self):
-        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        # Оптимизация для RPi: WAL режим + уменьшенный кэш
+        # Максимальная оптимизация для RPi
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA cache_size=-32000')  # 32MB кэш (было 64MB)
+        conn.execute('PRAGMA cache_size=-32000')
         conn.execute('PRAGMA temp_store=MEMORY')
-        # Дополнительная оптимизация для ARM
-        conn.execute('PRAGMA mmap_size=268435456')  # 256MB
+        conn.execute('PRAGMA mmap_size=268435456')
+        conn.execute('PRAGMA busy_timeout=30000')
         return conn
+    
+    def _precreate_connections(self):
+        """Предварительное создание пула соединений"""
+        for _ in range(self.max_connections):
+            try:
+                conn = self._create_connection()
+                self._pool.append(conn)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not pre-create connection: {e}")
     
     @contextmanager
     def get_connection(self):

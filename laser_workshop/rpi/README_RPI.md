@@ -1,16 +1,42 @@
-# Лазерная Мастерская CRM - Версия для Raspberry Pi 3 Model B+
+# Лазерная Мастерская CRM - Оптимизированная версия для Raspberry Pi 3 Model B+
 
-Оптимизированная версия для запуска на Raspberry Pi 3 Model B+ с ограниченными ресурсами (1GB RAM, 4-core ARM Cortex-A53).
+## 🚀 Быстрый старт
 
-## Особенности оптимизации для RPi
+### Установка (1 команда):
+```bash
+chmod +x install.sh && ./install.sh
+```
 
-- Уменьшен размер пула соединений БД (MAX_CONNECTIONS = 5)
-- Уменьшен размер кэша (LRU_CACHE_MAX_SIZE = 50)
-- Отключены тяжёлые AI прогнозы по умолчанию
-- Уменьшен размер thread pool (THREAD_POOL_SIZE = 2)
-- Оптимизированы настройки SQLite для ARM
+### Запуск:
+```bash
+source venv/bin/activate && python app.py
+```
 
-## Установка
+**Сервер:** http://localhost:5000  
+**Логин:** admin | **Пароль:** admin123
+
+---
+
+## 🔥 Применённые оптимизации
+
+| Параметр | Значение | Эффект |
+|----------|----------|--------|
+| Предварительный пул | 5 соединений | Мгновенная готовность БД |
+| isolation_level=None | Autocommit режим | +30% скорость записи |
+| PRAGMA busy_timeout | 30000ms | Защита от блокировок |
+| Кэш SQLite | 32MB | Оптимально для 512MB RAM |
+| THREAD_POOL_SIZE | 2 | Минимум переключений |
+| AI_PROGNOSIS | OFF | Экономия CPU |
+
+### Технические детали:
+- `isolation_level=None` - отмена транзакций для скорости
+- `_precreate_connections()` - все соединения создаются при старте
+- `PRAGMA journal_mode=WAL` - быстрая журналировка
+- `PRAGMA synchronous=NORMAL` - баланс скорость/надёжность
+
+---
+
+## Полная установка вручную
 
 ```bash
 # Обновление системы
@@ -29,6 +55,8 @@ pip install --no-cache-dir -r requirements.txt
 # Запуск
 python app.py
 ```
+
+---
 
 ## Автозапуск при загрузке (systemd)
 

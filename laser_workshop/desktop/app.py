@@ -40,7 +40,7 @@ CDEK_API_KEY = 'YOUR_CDEK_API_KEY'
 
 # Полные параметры для Desktop версии
 MAX_CONNECTIONS = 10
-CACHE_TTL = 300  # 5 минут
+CACHE_TTL = 300
 MAX_USER_STATES = 1000
 THREAD_POOL_SIZE = 5
 
@@ -57,6 +57,7 @@ app = Flask(__name__,
             static_url_path='/static')
 app.secret_key = SECRET_KEY
 app.config['JSON_AS_ASCII'] = False
+app.config['DEBUG'] = DEBUG_MODE
 
 # ==================== ПУЛ СОЕДИНЕНИЙ ====================
 class ConnectionPool:
@@ -66,15 +67,28 @@ class ConnectionPool:
         self._pool = []
         self._lock = Lock()
         self._initialized = False
+        # Предварительное создание всех соединений для быстрого старта
+        self._precreate_connections()
     
     def _create_connection(self):
-        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False, isolation_level=None)
         conn.row_factory = sqlite3.Row
+        # Оптимизация для Desktop
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA cache_size=-64000')  # 64MB кэш
+        conn.execute('PRAGMA cache_size=-64000')
         conn.execute('PRAGMA temp_store=MEMORY')
+        conn.execute('PRAGMA busy_timeout=30000')
         return conn
+    
+    def _precreate_connections(self):
+        """Предварительное создание пула соединений"""
+        for _ in range(self.max_connections):
+            try:
+                conn = self._create_connection()
+                self._pool.append(conn)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not pre-create connection: {e}")
     
     @contextmanager
     def get_connection(self):
