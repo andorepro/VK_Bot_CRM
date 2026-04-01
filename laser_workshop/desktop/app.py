@@ -26,38 +26,34 @@ from contextlib import contextmanager
 import random
 import weakref
 
-# ==================== КОНФИГУРАЦИЯ ДЛЯ DESKTOP ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'workshop.db')
-BACKUP_DIR = os.path.join(BASE_DIR, 'backups')
-STATIC_DIR = os.path.join(BASE_DIR, '../static')
-TEMPLATE_DIR = os.path.join(BASE_DIR, '../templates')
-SECRET_KEY = 'laser_workshop_desktop_secret_key_2026_change_this'
-VK_TOKEN = 'YOUR_VK_TOKEN_HERE'
-VK_GROUP_ID = 'YOUR_GROUP_ID'
-YOOKASSA_SECRET = 'YOUR_YOOKASSA_SECRET'
-CDEK_API_KEY = 'YOUR_CDEK_API_KEY'
-
-# Полные параметры для Desktop версии
-MAX_CONNECTIONS = 10
-CACHE_TTL = 300
-MAX_USER_STATES = 1000
-THREAD_POOL_SIZE = 5
-
-# AI прогнозы включены для Desktop
-AI_PROGNOSIS_ENABLED = True
-
-# Режим отладки (только для Desktop!)
-DEBUG_MODE = True
+# ==================== ЗАГРУЗКА КОНФИГУРАЦИИ ====================
+from config import config
 
 # ==================== ИНИЦИАЛИЗАЦИЯ FLASK ====================
 app = Flask(__name__, 
-            static_folder=STATIC_DIR, 
-            template_folder=TEMPLATE_DIR,
+            static_folder=config.BASE_DIR + '/../static' if hasattr(config, 'BASE_DIR') else os.path.join(os.path.dirname(os.path.abspath(__file__)), '../static'), 
+            template_folder=config.BASE_DIR + '/../templates' if hasattr(config, 'BASE_DIR') else os.path.join(os.path.dirname(os.path.abspath(__file__)), '../templates'),
             static_url_path='/static')
-app.secret_key = SECRET_KEY
+app.secret_key = config.SECRET_KEY
+app.debug = config.DEBUG_MODE
 app.config['JSON_AS_ASCII'] = False
-app.config['DEBUG'] = DEBUG_MODE
+app.config['DEBUG'] = config.DEBUG_MODE
+
+# Глобальные переменные из конфигурации
+BASE_DIR = config.BASE_DIR
+DB_PATH = config.DB_PATH
+BACKUP_DIR = config.DB_BACKUP_DIR
+SECRET_KEY = config.SECRET_KEY
+VK_TOKEN = config.VK_TOKEN
+VK_GROUP_ID = config.VK_GROUP_ID
+
+# Параметры Desktop из конфигурации
+MAX_CONNECTIONS = config.MAX_CONNECTIONS
+CACHE_TTL = config.CACHE_TTL
+MAX_USER_STATES = config.MAX_USER_STATES
+THREAD_POOL_SIZE = config.THREAD_POOL_SIZE
+AI_PROGNOSIS_ENABLED = config.AI_PROGNOSIS
+DEBUG_MODE = config.DEBUG_MODE
 
 # ==================== ПУЛ СОЕДИНЕНИЙ ====================
 class ConnectionPool:
