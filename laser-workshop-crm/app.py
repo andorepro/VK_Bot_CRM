@@ -8,7 +8,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 import os
 import sqlite3
-import hashlib
+import bcrypt
 import jwt
 import datetime
 import requests
@@ -272,7 +272,7 @@ def init_db():
     # Создаем админа по умолчанию
     cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',))
     if not cursor.fetchone():
-        password_hash = hashlib.sha256(DEFAULT_ADMIN_PASSWORD.encode()).hexdigest()
+        password_hash = bcrypt.hashpw(DEFAULT_ADMIN_PASSWORD.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         cursor.execute('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
                       ('admin', password_hash, 'admin'))
         print("✅ Admin user created: admin / admin123")
@@ -285,7 +285,7 @@ def init_db():
     for username, password, role in test_users:
         cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
         if not cursor.fetchone():
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             cursor.execute('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
                           (username, password_hash, role))
     
@@ -772,16 +772,14 @@ def login_page():
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
+
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = ? AND password_hash = ?',
-                      (username, password_hash))
+        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
         user = cursor.fetchone()
         conn.close()
-        
-        if user:
+
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
             token = generate_token(username, user['role'])
             response = make_response(redirect(url_for('index')))
             response.set_cookie('auth_token', token, max_age=604800)
@@ -789,9 +787,8 @@ def login_page():
             return response
         else:
             return render_template('index.html', error='Неверный логин или пароль')
-    
-    return render_template('index.html')
 
+    return render_template('index.html')
 @app.route('/logout')
 def logout():
     response = make_response(redirect(url_for('login_page')))
@@ -1300,7 +1297,7 @@ def create_user():
     conn = get_db()
     cursor = conn.cursor()
     
-    password_hash = hashlib.sha256(data.get('password', '').encode()).hexdigest()
+    password_hash = bcrypt.hashpw(data.get('password', '').encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
     try:
         cursor.execute('''
@@ -1406,6 +1403,92 @@ self.addEventListener('fetch', event => {
 });
 """
     return app.response_class(sw_content, mimetype='application/javascript')
+
+
+# ==================== VK LONG POLL API ДЛЯ FRONTEND ====================
+@app.route('/api/vk/longpoll/init')
+@login_required
+def init_vk_longpoll():
+    """Инициализация Long Poll для frontend (возвращает server/key/ts)"""
+    if not VK_TOKEN or VK_TOKEN == 'YOUR_VK_TOKEN_HERE':
+        return jsonify({
+            'success': False,
+            'error': 'VK_TOKEN не настроен'
+        })
+    
+    try:
+        # Получаем данные для Long Poll через VK API
+        url = 'https://api.vk.com/method/messages.getLongPollServer'
+        params = {
+            'access_token': VK_TOKEN,
+            'v': '5.131',
+            'lp_version': 3
+        }
+        response = requests.post(url, params=params, timeout=10)
+        data = response.json()
+        
+        if 'response' in data:
+            return jsonify({
+                'success': True,
+                'server': data['response']['server'],
+                'key': data['response']['key'],
+                'ts': data['response']['ts']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': data.get('error', {}).get('error_msg', 'Unknown error')
+            })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/chat/receive', methods=['POST'])
+@login_required
+def receive_chat_message():
+    """Получение сообщения от админа для отправки клиенту VK"""
+    data = request.json
+    vk_id = data.get('vk_id')
+    message = data.get('message')
+    
+    if not vk_id or not message:
+        return jsonify({'success': False, 'error': 'vk_id и message обязательны'}), 400
+    
+    # Отправляем сообщение через VK
+    result = vk_send_message(vk_id, message)
+    
+    # Сохраняем в БД как исходящее от админа
+    save_vk_message(vk_id, 0, message, is_admin=1)
+    
+    # Логируем аудит
+    log_audit(request.cookies.get('auth_token'), 'send_vk_message', 'vk_message', None, vk_id)
+    
+    return jsonify({
+        'success': True,
+        'message_id': result
+    })
+
+@app.route('/api/vk/messages')
+@login_required
+def get_vk_messages():
+    """Получение истории сообщений с клиентом"""
+    vk_id = request.args.get('vk_id', type=int)
+    limit = request.args.get('limit', 50, type=int)
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    if vk_id:
+        cursor.execute("SELECT * FROM vk_messages WHERE vk_id = ? ORDER BY timestamp DESC LIMIT ?", (vk_id, limit))
+    else:
+        cursor.execute("SELECT * FROM vk_messages ORDER BY timestamp DESC LIMIT ?", (limit,))
+    
+    messages = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify(messages)
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
