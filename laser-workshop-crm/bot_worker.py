@@ -1,685 +1,815 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🤖 VK Bot Worker для Лазерная Мастерская CRM (Фаза 3)
-- LongPoll интеграция с ВКонтакте
-- 11 алгоритмов расчёта стоимости
-- Система промокодов и кэшбека
-- Автосохранение заказов в БД
-- Обработка ошибок и перезапуск
+VK Bot for Laser Workshop CRM with Real Database Integration
+Features:
+- Separate menus for Admin and Client
+- Persistent inline keyboards
+- Real SQLite DB integration (Orders, Users, Cashback, Stock)
+- Dialog state management
+- Long Poll API support
 """
-import sys
-sys.stdout.reconfigure(encoding='utf-8')
 
 import os
-import sqlite3
+import sys
 import time
-import requests
-import json
-from threading import Thread
-import datetime
+import logging
+import sqlite3
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import vk_api
+from vk_api.longpoll import VkLongPoll, VkEventType
+from vk_api.keyboard import VkKeyboard, VkKeyboardColor
+from vk_api.utils import get_random_id
 
-# ==================== КОНФИГУРАЦИЯ ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'workshop.db')
+# Load environment variables
+load_dotenv()
 
-# Загрузка из .env или значения по умолчанию
-def get_env(key, default):
-    env_path = os.path.join(BASE_DIR, '.env')
-    if os.path.exists(env_path):
-        with open(env_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip() and not line.startswith('#') and '=' in line:
-                    k, v = line.strip().split('=', 1)
-                    if k == key:
-                        return v
-    return default
+# Configuration
+VK_TOKEN = os.getenv('VK_TOKEN')
+DB_PATH = os.getenv('DB_PATH', 'workshop.db')
+ADMIN_IDS = list(map(int, os.getenv('ADMIN_IDS', '').split(','))) if os.getenv('ADMIN_IDS') else []
 
-VK_TOKEN = get_env('VK_TOKEN', 'YOUR_VK_TOKEN_HERE')
-VK_GROUP_ID = get_env('VK_GROUP_ID', 'YOUR_GROUP_ID')
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger('VK_Bot')
 
-# ==================== БАЗА ДАННЫХ ====================
-def get_db():
-    """Получение подключения к БД"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# In-memory state storage (for production use Redis)
+user_states = {}
 
-def save_vk_message(vk_id, from_user, message_text, is_admin=0):
-    """Сохранение сообщения в БД"""
-    try:
-        conn = get_db()
+class DatabaseManager:
+    """Manager for SQLite database operations"""
+    
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.init_db()
+    
+    def get_connection(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    def init_db(self):
+        """Initialize database tables if they don't exist"""
+        conn = self.get_connection()
         cursor = conn.cursor()
+        
+        # Users table
         cursor.execute('''
-        INSERT INTO vk_messages (vk_id, from_user, message_text, is_admin)
-        VALUES (?, ?, ?, ?)
-        ''', (vk_id, from_user, message_text, is_admin))
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vk_id INTEGER UNIQUE NOT NULL,
+                name TEXT,
+                phone TEXT,
+                role TEXT DEFAULT 'client',
+                cashback REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_visit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Orders table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_number TEXT UNIQUE NOT NULL,
+                vk_id INTEGER NOT NULL,
+                service_type TEXT,
+                material_type TEXT,
+                thickness REAL,
+                area REAL,
+                quantity INTEGER DEFAULT 1,
+                price REAL,
+                discount REAL DEFAULT 0.0,
+                final_price REAL,
+                status TEXT DEFAULT 'new',
+                comment TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (vk_id) REFERENCES users(vk_id)
+            )
+        ''')
+        
+        # Stock table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_name TEXT UNIQUE NOT NULL,
+                material_type TEXT,
+                thickness REAL,
+                size_x REAL,
+                size_y REAL,
+                quantity INTEGER DEFAULT 0,
+                unit TEXT,
+                min_quantity INTEGER DEFAULT 5,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Cashback transactions
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cashback_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vk_id INTEGER NOT NULL,
+                amount REAL,
+                transaction_type TEXT,
+                order_id INTEGER,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (vk_id) REFERENCES users(vk_id),
+                FOREIGN KEY (order_id) REFERENCES orders(id)
+            )
+        ''')
+        
+        # Settings table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Insert default settings
+        default_settings = [
+            ('cashback_percent', '5'),
+            ('admin_notification', 'true'),
+            ('auto_confirm', 'false')
+        ]
+        for key, value in default_settings:
+            cursor.execute('''
+                INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
+            ''', (key, value))
+        
         conn.commit()
         conn.close()
-    except Exception as e:
-        print(f"❌ Ошибка сохранения сообщения: {e}")
-
-def get_or_create_client(vk_id, name='VK User'):
-    """Получение или создание клиента"""
-    try:
-        conn = get_db()
+        logger.info("Database initialized successfully")
+    
+    def get_or_create_user(self, vk_id, name=None):
+        """Get existing user or create new one"""
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM clients WHERE vk_id = ?', (vk_id,))
-        client = cursor.fetchone()
         
-        if not client:
+        cursor.execute('SELECT * FROM users WHERE vk_id = ?', (vk_id,))
+        user = cursor.fetchone()
+        
+        if not user:
             cursor.execute('''
-            INSERT INTO clients (vk_id, name) VALUES (?, ?)
-            ''', (vk_id, name))
+                INSERT INTO users (vk_id, name, role) 
+                VALUES (?, ?, ?)
+            ''', (vk_id, name, 'client'))
             conn.commit()
-            client_id = cursor.lastrowid
+            cursor.execute('SELECT * FROM users WHERE vk_id = ?', (vk_id,))
+            user = cursor.fetchone()
+            logger.info(f"New user created: VK ID {vk_id}")
         else:
-            client_id = client['id']
+            # Update last visit
+            cursor.execute('''
+                UPDATE users SET last_visit = CURRENT_TIMESTAMP WHERE vk_id = ?
+            ''', (vk_id,))
+            conn.commit()
         
         conn.close()
-        return client_id
-    except Exception as e:
-        print(f"❌ Ошибка работы с клиентом: {e}")
-        return None
-
-def get_client_cashback(vk_id):
-    """Получение баланса кэшбека клиента"""
-    try:
-        conn = get_db()
+        return dict(user) if user else None
+    
+    def get_user_role(self, vk_id):
+        """Get user role from database"""
+        if vk_id in ADMIN_IDS:
+            return 'admin'
+        
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT cashback_balance FROM clients WHERE vk_id = ?', (vk_id,))
-        client = cursor.fetchone()
+        cursor.execute('SELECT role FROM users WHERE vk_id = ?', (vk_id,))
+        result = cursor.fetchone()
         conn.close()
-        return client['cashback_balance'] if client else 0
-    except Exception as e:
-        print(f"❌ Ошибка получения кэшбека: {e}")
-        return 0
-
-def get_price_list():
-    """Получение списка услуг"""
-    try:
-        conn = get_db()
+        
+        return result['role'] if result else 'client'
+    
+    def create_order(self, vk_id, order_data):
+        """Create new order in database"""
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM price_list')
+        
+        order_number = f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S')}-{vk_id}"
+        
+        cursor.execute('''
+            INSERT INTO orders (
+                order_number, vk_id, service_type, material_type, 
+                thickness, area, quantity, price, discount, 
+                final_price, status, comment
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            order_number, vk_id, order_data.get('service_type'),
+            order_data.get('material_type'), order_data.get('thickness'),
+            order_data.get('area'), order_data.get('quantity', 1),
+            order_data.get('price', 0), order_data.get('discount', 0),
+            order_data.get('final_price', 0), 'new',
+            order_data.get('comment', '')
+        ))
+        
+        conn.commit()
+        
+        # Get created order
+        cursor.execute('SELECT * FROM orders WHERE order_number = ?', (order_number,))
+        order = dict(cursor.fetchone()) if cursor.fetchone() else None
+        
+        conn.close()
+        
+        if order:
+            logger.info(f"Order created: {order_number}")
+            self.add_cashback_transaction(vk_id, order['final_price'] * 0.05, 'accrual', order['id'], f"Кэшбек за заказ {order_number}")
+        
+        return order
+    
+    def get_orders_by_status(self, status=None, limit=10):
+        """Get orders by status"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        if status:
+            cursor.execute('''
+                SELECT o.*, u.name as user_name 
+                FROM orders o 
+                JOIN users u ON o.vk_id = u.vk_id 
+                WHERE o.status = ? 
+                ORDER BY o.created_at DESC 
+                LIMIT ?
+            ''', (status, limit))
+        else:
+            cursor.execute('''
+                SELECT o.*, u.name as user_name 
+                FROM orders o 
+                JOIN users u ON o.vk_id = u.vk_id 
+                ORDER BY o.created_at DESC 
+                LIMIT ?
+            ''', (limit,))
+        
+        orders = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return orders
+    
+    def update_order_status(self, order_id, status):
+        """Update order status"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE orders 
+            SET status = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        ''', (status, order_id))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"Order {order_id} status updated to {status}")
+    
+    def get_user_orders(self, vk_id, limit=10):
+        """Get user's orders"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM orders 
+            WHERE vk_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        ''', (vk_id, limit))
+        
+        orders = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return orders
+    
+    def get_user_cashback(self, vk_id):
+        """Get user's cashback balance"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT cashback FROM users WHERE vk_id = ?', (vk_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result['cashback'] if result else 0.0
+    
+    def add_cashback_transaction(self, vk_id, amount, transaction_type, order_id=None, description=None):
+        """Add cashback transaction"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Add transaction
+        cursor.execute('''
+            INSERT INTO cashback_transactions (vk_id, amount, transaction_type, order_id, description)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (vk_id, amount, transaction_type, order_id, description))
+        
+        # Update user cashback
+        if transaction_type == 'accrual':
+            cursor.execute('''
+                UPDATE users SET cashback = cashback + ? WHERE vk_id = ?
+            ''', (amount, vk_id))
+        elif transaction_type == 'usage':
+            cursor.execute('''
+                UPDATE users SET cashback = cashback - ? WHERE vk_id = ?
+            ''', (amount, vk_id))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"Cashback transaction: {amount} for VK {vk_id}")
+    
+    def get_stock_items(self, low_stock_only=False):
+        """Get stock items"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        if low_stock_only:
+            cursor.execute('''
+                SELECT * FROM stock 
+                WHERE quantity <= min_quantity 
+                ORDER BY quantity ASC
+            ''')
+        else:
+            cursor.execute('SELECT * FROM stock ORDER BY material_name')
+        
         items = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return items
-    except Exception as e:
-        print(f"❌ Ошибка получения прайс-листа: {e}")
-        return []
-
-def validate_promo_code(code):
-    """Валидация промокода"""
-    try:
-        conn = get_db()
+    
+    def get_statistics(self, days=30):
+        """Get statistics for the last N days"""
+        conn = self.get_connection()
         cursor = conn.cursor()
+        
+        date_from = datetime.now() - timedelta(days=days)
+        
+        # Total orders
         cursor.execute('''
-        SELECT discount_percent, max_uses, current_uses, valid_until, is_active
-        FROM promo_codes WHERE code = ?
-        ''', (code.upper(),))
-        promo = cursor.fetchone()
-        conn.close()
+            SELECT COUNT(*) as count, SUM(final_price) as revenue
+            FROM orders 
+            WHERE created_at >= ?
+        ''', (date_from,))
+        stats = dict(cursor.fetchone())
         
-        if not promo:
-            return None
-        if not promo['is_active']:
-            return None
-        if promo['current_uses'] >= promo['max_uses']:
-            return None
-        if promo['valid_until']:
-            valid_until = datetime.datetime.strptime(promo['valid_until'], '%Y-%m-%d')
-            if datetime.datetime.now() > valid_until:
-                return None
-        
-        return promo['discount_percent'] / 100.0
-    except Exception as e:
-        print(f"❌ Ошибка валидации промокода: {e}")
-        return None
-
-def use_promo_code(code):
-    """Использование промокода"""
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
+        # Orders by status
         cursor.execute('''
-        UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = ?
-        ''', (code.upper(),))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"❌ Ошибка использования промокода: {e}")
-
-def calculate_price(calc_type, params, base_price):
-    """Расчёт стоимости по 11 типам"""
-    price = 0.0
-    
-    try:
-        if calc_type == 'fixed':
-            quantity = int(params.get('quantity', 1))
-            price = base_price * quantity
-            
-        elif calc_type == 'area_cm2':
-            length = float(params.get('length', 0))
-            width = float(params.get('width', 0))
-            area = (length / 10) * (width / 10)
-            price = area * base_price
-            
-        elif calc_type == 'meter_thickness':
-            meters = float(params.get('meters', 0))
-            thickness = float(params.get('thickness', 3))
-            price = meters * (base_price * (thickness / 3.0))
-            
-        elif calc_type == 'per_minute':
-            minutes = float(params.get('minutes', 0))
-            price = minutes * base_price
-            
-        elif calc_type == 'per_char':
-            chars = int(params.get('chars', 0))
-            price = chars * base_price
-            
-        elif calc_type == 'vector_length':
-            length = float(params.get('length', 0))
-            price = length * base_price
-            
-        elif calc_type == 'setup_batch':
-            setup_price = float(params.get('setup_price', base_price))
-            unit_price = float(params.get('unit_price', base_price))
-            quantity = int(params.get('quantity', 1))
-            price = setup_price + (unit_price * quantity)
-            
-        elif calc_type == 'photo_raster':
-            length = float(params.get('length', 0))
-            width = float(params.get('width', 0))
-            dpi_multiplier = float(params.get('dpi_multiplier', 1.0))
-            area = (length / 10) * (width / 10)
-            price = area * base_price * dpi_multiplier
-            
-        elif calc_type == 'cylindrical':
-            diameter = float(params.get('diameter', 0))
-            length = float(params.get('length', 0))
-            area = (diameter * 3.14 * length) / 100
-            price = area * base_price
-            
-        elif calc_type == 'volume_3d':
-            length = float(params.get('length', 0))
-            width = float(params.get('width', 0))
-            depth = float(params.get('depth', 0))
-            volume = (length / 10) * (width / 10) * depth
-            price = volume * base_price
-            
-        elif calc_type == 'material_and_cut':
-            length = float(params.get('length', 0))
-            width = float(params.get('width', 0))
-            cut_meters = float(params.get('cut_meters', 0))
-            material_price = float(params.get('material_price', base_price))
-            cut_price = float(params.get('cut_price', base_price))
-            material_cost = (length / 10) * (width / 10) * material_price
-            cut_cost = cut_meters * cut_price
-            price = material_cost + cut_cost
-    except Exception as e:
-        print(f"❌ Ошибка расчёта цены: {e}")
-    
-    return round(price, 2)
-
-def apply_discount(total_price, quantity, promo_code=None, cashback_balance=0):
-    """Применение скидок и кэшбека"""
-    discount = 0
-    discount_source = 'quantity'
-    cashback_used = 0
-    
-    # Оптовые скидки
-    if quantity >= 100:
-        discount = 0.20
-    elif quantity >= 50:
-        discount = 0.15
-    elif quantity >= 20:
-        discount = 0.10
-    elif quantity >= 10:
-        discount = 0.05
-    
-    # Промокод (приоритет выше)
-    if promo_code:
-        promo_discount = validate_promo_code(promo_code)
-        if promo_discount and promo_discount > discount:
-            discount = promo_discount
-            discount_source = 'promo'
-    
-    discounted_price = total_price * (1 - discount)
-    
-    # Кэшбек (максимум 30% от суммы)
-    max_cashback = discounted_price * 0.30
-    if cashback_balance > 0:
-        cashback_used = min(cashback_balance, max_cashback)
-        discounted_price -= cashback_used
-    
-    return round(discounted_price, 2), int(discount * 100), discount_source, round(cashback_used, 2)
-
-def vk_send_message(vk_id, message):
-    """Отправка сообщения ВКонтакте"""
-    if not VK_TOKEN or VK_TOKEN == 'YOUR_VK_TOKEN_HERE':
-        print(f"[MOCK VK] To {vk_id}: {message}")
-        return True
-    
-    try:
-        url = 'https://api.vk.com/method/messages.send'
-        params = {
-            'user_id': vk_id,
-            'message': message,
-            'random_id': int(time.time() * 1000),
-            'access_token': VK_TOKEN,
-            'v': '5.131'
-        }
-        response = requests.post(url, params=params, timeout=10)
-        result = response.json()
-        
-        if 'error' in result:
-            print(f"❌ VK Error: {result['error']}")
-            return False
-        
-        return result.get('response', {}).get('message_id', 0)
-    except requests.exceptions.ReadTimeout:
-        print("⚠️ VK ReadTimeout")
-        return 0
-    except Exception as e:
-        print(f"❌ VK Send Error: {e}")
-        return 0
-
-def add_cashback(vk_id, order_id, amount):
-    """Начисление кэшбека 5% от суммы заказа"""
-    try:
-        cashback = amount * 0.05
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM clients WHERE vk_id = ?', (vk_id,))
-        client = cursor.fetchone()
-        
-        if client:
-            cursor.execute('''
-            INSERT INTO cashback_transactions (client_id, order_id, amount, operation_type)
-            VALUES (?, ?, ?, 'earned')
-            ''', (client['id'], order_id, cashback))
-            
-            cursor.execute('''
-            UPDATE clients SET cashback_balance = cashback_balance + ?, 
-                              cashback_earned = cashback_earned + ?
-            WHERE vk_id = ?
-            ''', (cashback, cashback, vk_id))
-            
-            conn.commit()
+            SELECT status, COUNT(*) as count 
+            FROM orders 
+            WHERE created_at >= ?
+            GROUP BY status
+        ''', (date_from,))
+        status_stats = {row['status']: row['count'] for row in cursor.fetchall()}
         
         conn.close()
-        return cashback
-    except Exception as e:
-        print(f"❌ Ошибка начисления кэшбека: {e}")
-        return 0
-
-# ==================== СОСТОЯНИЕ БОТА ====================
-user_states = {}
-
-class VKBotWorker(Thread):
-    """VK Bot Worker с LongPoll"""
-    
-    def __init__(self):
-        super().__init__(daemon=True)
-        self.last_ts = 0
-        self.running = True
-        self.reconnect_delay = 5
-    
-    def run(self):
-        """Основной цикл бота"""
-        print("🤖 VK Bot запущен в фоновом режиме...")
-        print(f"🔑 VK Token: {'✅' if VK_TOKEN and VK_TOKEN != 'YOUR_VK_TOKEN_HERE' else '❌'}")
         
-        while self.running:
-            try:
-                self.poll_messages()
-            except requests.exceptions.ReadTimeout:
-                print(f"⚠️ ReadTimeout - перезапуск через {self.reconnect_delay}с...")
-                time.sleep(self.reconnect_delay)
-            except Exception as e:
-                print(f"❌ Ошибка бота: {e}")
-                time.sleep(self.reconnect_delay)
-    
-    def poll_messages(self):
-        """Получение событий через LongPoll"""
-        if not VK_TOKEN or VK_TOKEN == 'YOUR_VK_TOKEN_HERE':
-            print("⚠️ VK_TOKEN не настроен. Бот в режиме ожидания...")
-            time.sleep(30)
-            return
-        
-        # Получение сервера LongPoll
-        url = 'https://api.vk.com/method/messages.getLongPollServer'
-        params = {
-            'access_token': VK_TOKEN,
-            'v': '5.131'
+        return {
+            'total_orders': stats['count'] or 0,
+            'revenue': stats['revenue'] or 0.0,
+            'by_status': status_stats
         }
-        
+
+# Initialize database manager
+db = DatabaseManager(DB_PATH)
+
+class VKBot:
+    """VK Bot class with Long Poll support"""
+    
+    def __init__(self, token):
+        self.token = token
+        self.vk = vk_api.VkApi(token=token)
+        self.longpoll = VkLongPoll(self.vk)
+        logger.info("VK Bot initialized")
+    
+    def send_message(self, user_id, text, keyboard=None, attachment=None):
+        """Send message to user"""
         try:
-            response = requests.get(url, params=params, timeout=10)
-            server_data = response.json().get('response', {})
+            params = {
+                'peer_id': user_id,
+                'message': text,
+                'random_id': get_random_id()
+            }
             
-            if not server_data:
-                print("❌ Не удалось получить LongPoll сервер")
-                time.sleep(5)
-                return
+            if keyboard:
+                params['keyboard'] = keyboard.get_keyboard()
             
-            longpoll_url = server_data.get('server')
-            key = server_data.get('key')
-            ts = server_data.get('ts', 0)
+            if attachment:
+                params['attachment'] = attachment
             
-            print(f"✅ LongPoll подключён: {longpoll_url[:50]}...")
-            
-            # Цикл опроса
-            while self.running:
-                try:
-                    poll_url = f'{longpoll_url}?act=a_check&key={key}&ts={ts}&wait=25'
-                    poll_response = requests.get(poll_url, timeout=30)
-                    poll_data = poll_response.json()
-                    
-                    # Проверка на ошибки LongPoll
-                    if 'failed' in poll_data:
-                        error_code = poll_data.get('failed')
-                        print(f"⚠️ LongPoll error {error_code}, переподключение...")
-                        break
-                    
-                    ts = poll_data.get('ts', ts)
-                    updates = poll_data.get('updates', [])
-                    
-                    for update in updates:
-                        if update[0] == 4:  # Новое сообщение
-                            self.handle_message(update)
-                
-                except requests.exceptions.ReadTimeout:
-                    continue
-                except Exception as e:
-                    print(f"LongPoll Error: {e}")
-                    break
-        
+            self.vk.method('messages.send', params)
+            logger.debug(f"Message sent to {user_id}: {text[:50]}...")
         except Exception as e:
-            print(f"❌ Ошибка подключения: {e}")
-            time.sleep(5)
+            logger.error(f"Error sending message: {e}")
     
-    def handle_message(self, update):
-        """Обработка нового сообщения"""
-        flags = update[3]
+    def get_main_keyboard(self, role):
+        """Get main menu keyboard based on role"""
+        keyboard = VkKeyboard(one_time=False, inline=False)
         
-        # Игнорирование исходящих сообщений
-        if flags & 2:
+        if role == 'admin':
+            # Admin menu
+            keyboard.add_button('📊 Все заказы', color=VkKeyboardColor.PRIMARY)
+            keyboard.add_row()
+            keyboard.add_button('✅ Подтвердить заказ', color=VkKeyboardColor.POSITIVE)
+            keyboard.add_row()
+            keyboard.add_button('📦 Склад', color=VkKeyboardColor.SECONDARY)
+            keyboard.add_row()
+            keyboard.add_button('📈 Статистика', color=VkKeyboardColor.PRIMARY)
+            keyboard.add_row()
+            keyboard.add_button('📢 Рассылка', color=VkKeyboardColor.SECONDARY)
+            keyboard.add_row()
+            keyboard.add_button('⚙️ Настройки', color=VkKeyboardColor.NEGATIVE)
+        else:
+            # Client menu
+            keyboard.add_button('📝 Новый заказ', color=VkKeyboardColor.POSITIVE)
+            keyboard.add_row()
+            keyboard.add_button('📦 Мои заказы', color=VkKeyboardColor.PRIMARY)
+            keyboard.add_row()
+            keyboard.add_button('💰 Мой кэшбек', color=VkKeyboardColor.SECONDARY)
+            keyboard.add_row()
+            keyboard.add_button('ℹ️ Помощь', color=VkKeyboardColor.SECONDARY)
+        
+        return keyboard
+    
+    def get_cancel_keyboard(self):
+        """Get cancel button keyboard"""
+        keyboard = VkKeyboard(one_time=False, inline=False)
+        keyboard.add_button('❌ Отмена', color=VkKeyboardColor.NEGATIVE)
+        return keyboard
+    
+    def get_confirmation_keyboard(self, yes_callback=None, no_callback=None):
+        """Get Yes/No confirmation keyboard"""
+        keyboard = VkKeyboard(one_time=False, inline=False)
+        keyboard.add_button('✅ Да', color=VkKeyboardColor.POSITIVE)
+        keyboard.add_button('❌ Нет', color=VkKeyboardColor.NEGATIVE)
+        return keyboard
+    
+    def handle_start_command(self, user_id, first_name):
+        """Handle /start command"""
+        user = db.get_or_create_user(user_id, first_name)
+        role = db.get_user_role(user_id)
+        
+        greeting = f"Привет, {first_name}! 👋\n\n"
+        if role == 'admin':
+            greeting += "Вы авторизованы как АДМИНИСТРАТОР.\nДоступны все функции управления."
+        else:
+            greeting += "Добро пожаловать в лазерную мастерскую!\nВыберите действие в меню."
+        
+        keyboard = self.get_main_keyboard(role)
+        self.send_message(user_id, greeting, keyboard)
+    
+    def handle_new_order(self, user_id):
+        """Start new order dialog"""
+        user_states[user_id] = {'step': 'service_type'}
+        
+        keyboard = VkKeyboard(one_time=False, inline=False)
+        services = [
+            'Гравировка', 'Резка дерева', 'Резка акрила', 
+            'Резка фанеры', 'Маркировка', '3D гравировка'
+        ]
+        
+        for i, service in enumerate(services):
+            keyboard.add_button(service, color=VkKeyboardColor.PRIMARY)
+            if (i + 1) % 2 == 0:
+                keyboard.add_row()
+        
+        keyboard.add_row()
+        keyboard.add_button('❌ Отмена', color=VkKeyboardColor.NEGATIVE)
+        
+        self.send_message(
+            user_id,
+            "📝 Выберите тип услуги:\n" + "\n".join([f"{i+1}. {s}" for i, s in enumerate(services)]),
+            keyboard
+        )
+    
+    def handle_my_orders(self, user_id):
+        """Show user's orders"""
+        orders = db.get_user_orders(user_id, limit=5)
+        
+        if not orders:
+            self.send_message(user_id, "У вас пока нет заказов.", self.get_main_keyboard('client'))
             return
         
-        vk_id = update[3] if isinstance(update[3], int) else update[1]
-        message_text = update[6]
+        message = "📦 Ваши последние заказы:\n\n"
+        for order in orders:
+            status_emoji = {'new': '🆕', 'in_progress': '⚙️', 'completed': '✅', 'cancelled': '❌'}.get(order['status'], '📄')
+            message += f"{status_emoji} Заказ #{order['order_number']}\n"
+            message += f"   Услуга: {order['service_type']}\n"
+            message += f"   Цена: {order['final_price']} ₽\n"
+            message += f"   Статус: {order['status']}\n\n"
         
-        # Сохранение сообщения в БД
-        save_vk_message(vk_id, vk_id, message_text, is_admin=0)
-        
-        # Обработка диалога
-        self.process_dialog(vk_id, message_text)
+        keyboard = self.get_main_keyboard('client')
+        self.send_message(user_id, message, keyboard)
     
-    def process_dialog(self, vk_id, message_text):
-        """Диалоговый автомат с клиентом"""
-        state = user_states.get(vk_id, {'step': 'start'})
-        step = state.get('step', 'start')
+    def handle_cashback(self, user_id):
+        """Show user's cashback"""
+        cashback = db.get_user_cashback(user_id)
         
-        if step == 'start':
-            # Показ меню услуг
-            price_list = get_price_list()
-            cashback = get_client_cashback(vk_id)
-            
-            menu_text = "🔧 Выберите услугу:\n\n"
-            for i, item in enumerate(price_list):
-                menu_text += f"{i+1}. {item['name']} - {item['price']}₽\n"
-            
-            if cashback > 0:
-                menu_text += f"\n💰 Ваш кэшбек: {cashback}₽ (можно использовать до 30% от суммы)"
-            
-            menu_text += "\n\n💡 Есть промокод? Напишите 'PROMO'"
-            menu_text += "\n💡 Использовать кэшбек? Напишите 'CASHBACK'"
-            menu_text += "\n\nВведите номер услуги:"
-            
-            vk_send_message(vk_id, menu_text)
-            user_states[vk_id] = {'step': 'select_service', 'price_list': price_list}
+        message = f"💰 Ваш кэшбек: {cashback:.2f} ₽\n\n"
+        message += "Кэшбек начисляется с каждого заказа (5%)\n"
+        message += "Можно использовать при оплате следующих заказов."
         
-        elif step == 'select_service':
-            # Обработка выбора услуги
-            if message_text.upper() == 'PROMO':
-                vk_send_message(vk_id, "🏷️ Введите ваш промокод:")
-                user_states[vk_id]['step'] = 'enter_promo'
-                return
+        keyboard = self.get_main_keyboard('client')
+        self.send_message(user_id, message, keyboard)
+    
+    def handle_help(self, user_id):
+        """Show help information"""
+        message = """ℹ️ Помощь
+
+📝 Как сделать заказ:
+1. Нажмите "Новый заказ"
+2. Выберите услугу
+3. Укажите параметры
+4. Подтвердите заказ
+
+📦 Статусы заказов:
+🆕 - Новый
+⚙️ - В работе
+✅ - Готов
+❌ - Отменён
+
+💰 Кэшбек:
+5% от суммы заказа возвращается на ваш счёт
+
+📞 Контакты:
+Телефон: +7 (999) 000-00-00
+Адрес: ул. Примерная, 1
+"""
+        keyboard = self.get_main_keyboard('client')
+        self.send_message(user_id, message, keyboard)
+    
+    def handle_admin_all_orders(self, user_id):
+        """Show all orders for admin"""
+        orders = db.get_orders_by_status(limit=10)
+        
+        if not orders:
+            self.send_message(user_id, "Заказов пока нет.", self.get_main_keyboard('admin'))
+            return
+        
+        message = "📊 Все заказы (последние 10):\n\n"
+        for order in orders:
+            status_emoji = {'new': '🆕', 'in_progress': '⚙️', 'completed': '✅', 'cancelled': '❌'}.get(order['status'], '📄')
+            message += f"{status_emoji} #{order['order_number']} - {order['user_name'] or 'Аноним'}\n"
+            message += f"   {order['service_type']} | {order['final_price']} ₽ | {order['status']}\n\n"
+        
+        keyboard = self.get_main_keyboard('admin')
+        self.send_message(user_id, message, keyboard)
+    
+    def handle_admin_stock(self, user_id):
+        """Show stock information"""
+        items = db.get_stock_items()
+        
+        if not items:
+            self.send_message(user_id, "Склад пуст.", self.get_main_keyboard('admin'))
+            return
+        
+        message = "📦 Склад материалов:\n\n"
+        for item in items:
+            warning = " ⚠️ МАЛО" if item['quantity'] <= item['min_quantity'] else ""
+            message += f"{item['material_name']} ({item['thickness']}мм): {item['quantity']} {item['unit']}{warning}\n"
+        
+        keyboard = self.get_main_keyboard('admin')
+        self.send_message(user_id, message, keyboard)
+    
+    def handle_admin_statistics(self, user_id):
+        """Show statistics"""
+        stats = db.get_statistics(days=30)
+        
+        message = f"""📈 Статистика за 30 дней:
+
+Всего заказов: {stats['total_orders']}
+Выручка: {stats['revenue']:.2f} ₽
+
+По статусам:
+"""
+        for status, count in stats['by_status'].items():
+            message += f"  {status}: {count}\n"
+        
+        keyboard = self.get_main_keyboard('admin')
+        self.send_message(user_id, message, keyboard)
+    
+    def process_order_step(self, user_id, text):
+        """Process order creation step by step"""
+        if user_id not in user_states:
+            return
+        
+        state = user_states[user_id]
+        step = state.get('step')
+        
+        if step == 'service_type':
+            state['service_type'] = text
+            state['step'] = 'material_type'
             
-            if message_text.upper() == 'CASHBACK':
-                cashback = get_client_cashback(vk_id)
-                vk_send_message(vk_id, f"💰 Ваш баланс кэшбека: {cashback}₽")
-                user_states[vk_id]['use_cashback'] = True
-                return
+            keyboard = VkKeyboard(one_time=False, inline=False)
+            materials = ['Фанера', 'Акрил', 'Дерево', 'Плексиглас', 'Кожа', 'Ткань']
+            for mat in materials:
+                keyboard.add_button(mat, color=VkKeyboardColor.PRIMARY)
+                keyboard.add_row()
+            keyboard.add_button('❌ Отмена', color=VkKeyboardColor.NEGATIVE)
             
+            self.send_message(user_id, f"✅ Выбрано: {text}\n\nВыберите материал:", keyboard)
+        
+        elif step == 'material_type':
+            state['material_type'] = text
+            state['step'] = 'thickness'
+            
+            keyboard = self.get_cancel_keyboard()
+            self.send_message(user_id, f"✅ Материал: {text}\n\nУкажите толщину в мм (числом):", keyboard)
+        
+        elif step == 'thickness':
             try:
-                service_idx = int(message_text) - 1
-                price_list = state.get('price_list', get_price_list())
+                thickness = float(text.replace(',', '.'))
+                state['thickness'] = thickness
+                state['step'] = 'size'
                 
-                if 0 <= service_idx < len(price_list):
-                    service = price_list[service_idx]
-                    user_states[vk_id] = {
-                        'step': 'collect_params',
-                        'service': service,
-                        'params': {},
-                        'promo_code': None,
-                        'use_cashback': state.get('use_cashback', False)
-                    }
-                    self.request_params(vk_id, service)
-                else:
-                    vk_send_message(vk_id, "❌ Неверный номер. Попробуйте снова:")
+                keyboard = self.get_cancel_keyboard()
+                self.send_message(user_id, f"✅ Толщина: {thickness}мм\n\nУкажите размеры в мм (формат: 100x100):", keyboard)
             except ValueError:
-                vk_send_message(vk_id, "❌ Введите число или 'PROMO'/'CASHBACK':")
+                self.send_message(user_id, "❌ Ошибка: введите число (например, 3 или 3.5)", self.get_cancel_keyboard())
         
-        elif step == 'enter_promo':
-            # Ввод промокода
-            promo_code = message_text.upper()
-            discount = validate_promo_code(promo_code)
-            
-            if discount:
-                vk_send_message(vk_id, f"✅ Промокод применён! Скидка {int(discount*100)}%")
-                user_states[vk_id]['promo_code'] = promo_code
-                user_states[vk_id]['step'] = 'select_service'
-            else:
-                vk_send_message(vk_id, "❌ Промокод недействителен. Попробуйте другой:")
-        
-        elif step == 'collect_params':
-            # Сбор параметров
-            service = state.get('service', {})
-            params = state.get('params', {})
-            calc_type = service.get('calc_type', 'fixed')
-            self.collect_param_step(vk_id, message_text, service, params, calc_type)
-    
-    def request_params(self, vk_id, service):
-        """Запрос параметров в зависимости от типа услуги"""
-        calc_type = service.get('calc_type', 'fixed')
-        
-        param_requests = {
-            'fixed': 'Введите количество (шт):',
-            'area_cm2': 'Введите длину (см):',
-            'meter_thickness': 'Введите длину реза (метры):',
-            'per_minute': 'Введите время работы (минуты):',
-            'per_char': 'Введите количество символов:',
-            'vector_length': 'Введите длину вектора (метры):',
-            'setup_batch': 'Введите тираж (шт):',
-            'photo_raster': 'Введите длину (см):',
-            'cylindrical': 'Введите диаметр (мм):',
-            'volume_3d': 'Введите длину (см):',
-            'material_and_cut': 'Введите длину материала (см):'
-        }
-        
-        vk_send_message(vk_id, param_requests.get(calc_type, 'Введите параметры:'))
-    
-    def collect_param_step(self, vk_id, message_text, service, params, calc_type):
-        """Пошаговый сбор параметров"""
-        current_param = service.get('calc_type', 'fixed')
-        
-        try:
-            if current_param == 'fixed':
-                params['quantity'] = int(message_text) if message_text.isdigit() else 1
+        elif step == 'size':
+            try:
+                parts = text.lower().replace(' ', '').split('x')
+                if len(parts) != 2:
+                    raise ValueError()
+                width, height = float(parts[0]), float(parts[1])
+                area = (width * height) / 1000000  # m²
+                state['area'] = area
+                state['size'] = f"{width}x{height}"
+                state['step'] = 'quantity'
                 
-            elif current_param == 'area_cm2':
-                if 'length' not in params:
-                    params['length'] = float(message_text)
-                    vk_send_message(vk_id, "Введите ширину (см):")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['width'] = float(message_text)
-                    
-            elif current_param == 'meter_thickness':
-                if 'meters' not in params:
-                    params['meters'] = float(message_text)
-                    vk_send_message(vk_id, "Введите толщину (мм):")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['thickness'] = float(message_text)
-                    
-            elif current_param == 'per_minute':
-                params['minutes'] = float(message_text)
-                
-            elif current_param == 'per_char':
-                params['chars'] = int(message_text) if message_text.isdigit() else 0
-                
-            elif current_param == 'vector_length':
-                params['length'] = float(message_text)
-                
-            elif current_param == 'setup_batch':
-                params['quantity'] = int(message_text) if message_text.isdigit() else 1
-                
-            elif current_param == 'photo_raster':
-                if 'length' not in params:
-                    params['length'] = float(message_text)
-                    vk_send_message(vk_id, "Введите ширину (см):")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['width'] = float(message_text)
-                    
-            elif current_param == 'cylindrical':
-                if 'diameter' not in params:
-                    params['diameter'] = float(message_text)
-                    vk_send_message(vk_id, "Введите длину (мм):")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['length'] = float(message_text)
-                    
-            elif current_param == 'volume_3d':
-                if 'length' not in params:
-                    params['length'] = float(message_text)
-                    vk_send_message(vk_id, "Введите ширину (см):")
-                    user_states[vk_id]['params'] = params
-                    return
-                elif 'width' not in params:
-                    params['width'] = float(message_text)
-                    vk_send_message(vk_id, "Введите глубину (мм):")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['depth'] = float(message_text)
-                    
-            elif current_param == 'material_and_cut':
-                if 'length' not in params:
-                    params['length'] = float(message_text)
-                    vk_send_message(vk_id, "Введите ширину (см):")
-                    user_states[vk_id]['params'] = params
-                    return
-                elif 'width' not in params:
-                    params['width'] = float(message_text)
-                    vk_send_message(vk_id, "Введите метры реза:")
-                    user_states[vk_id]['params'] = params
-                    return
-                else:
-                    params['cut_meters'] = float(message_text)
-            
-            # Расчёт итоговой цены
-            base_price = service.get('price', 0)
-            total_price = calculate_price(current_param, params, base_price)
-            
-            quantity = params.get('quantity', 1)
-            promo_code = user_states[vk_id].get('promo_code')
-            cashback_balance = get_client_cashback(vk_id) if user_states[vk_id].get('use_cashback') else 0
-            
-            final_price, discount_percent, discount_source, cashback_used = apply_discount(
-                total_price, quantity, promo_code, cashback_balance
-            )
-            
-            # Использование промокода
-            if promo_code:
-                use_promo_code(promo_code)
-            
-            # Сохранение заказа
-            self.save_order(vk_id, service, params, final_price, discount_percent, promo_code, cashback_used)
-            
-            # Подтверждение
-            confirm_text = f"✅ Заказ оформлен!\n"
-            confirm_text += f"Услуга: {service['name']}\n"
-            confirm_text += f"Сумма: {final_price}₽"
-            
-            if discount_percent > 0:
-                confirm_text += f" (скидка {discount_percent}% via {discount_source})"
-            if cashback_used > 0:
-                confirm_text += f" (кэшбек: -{cashback_used}₽)"
-            
-            cashback_earned = final_price * 0.05
-            confirm_text += f"\n\n🎁 Вам начислено {cashback_earned:.2f}₽ кэшбека!"
-            confirm_text += "\n\nМенеджер свяжется с вами."
-            
-            vk_send_message(vk_id, confirm_text)
-            user_states[vk_id] = {'step': 'start'}
+                keyboard = self.get_cancel_keyboard()
+                self.send_message(user_id, f"✅ Размер: {width}x{height}мм (площадь: {area:.4f} м²)\n\nУкажите количество (шт):", keyboard)
+            except (ValueError, IndexError):
+                self.send_message(user_id, "❌ Ошибка: формат 100x100", self.get_cancel_keyboard())
         
-        except Exception as e:
-            print(f"❌ Ошибка сбора параметров: {e}")
-            vk_send_message(vk_id, "❌ Произошла ошибка. Начнём сначала.")
-            user_states[vk_id] = {'step': 'start'}
-    
-    def save_order(self, vk_id, service, params, total_price, discount, promo_code, cashback_used):
-        """Сохранение заказа в БД"""
-        try:
-            client_id = get_or_create_client(vk_id, f"VK User {vk_id}")
-            params_text = "; ".join([f"{k}: {v}" for k, v in params.items()])
-            
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute('''
-            INSERT INTO orders (client_id, vk_id, client_name, service_id, service_name,
-                               description, parameters, total_price, discount, promo_code,
-                               cashback_applied, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                client_id, vk_id, f"VK User {vk_id}", service['id'], service['name'],
-                service['name'], params_text, total_price, discount, promo_code, cashback_used, 'NEW'
-            ))
-            
-            order_id = cursor.lastrowid
-            
-            # Начисление кэшбека
-            add_cashback(vk_id, order_id, total_price)
-            
-            conn.commit()
-            conn.close()
-            
-            print(f"✅ Заказ #{order_id} создан для VK {vk_id}")
-        
-        except Exception as e:
-            print(f"❌ Ошибка сохранения заказа: {e}")
+        elif step == 'quantity':
+            try:
+                quantity = int(text)
+                state['quantity'] = quantity
+                
+                # Calculate price (simplified)
+                base_price = 1000  # rub per m²
+                price = round(state['area'] * base_price * quantity * 1.5)
+                state['price'] = price
+                state['final_price'] = price
+                state['step'] = 'confirm'
+                
+                keyboard = self.get_confirmation_keyboard()
+                message = f"""✅ Параметры заказа:
+Услуга: {state['service_type']}
+Материал: {state['material_type']}
+Толщина: {state['thickness']}мм
+Размер: {state['size']}мм
+Количество: {quantity} шт
+Площадь: {state['area']:.4f} м²
 
-# ==================== ЗАПУСК ====================
-if __name__ == '__main__':
-    print("=" * 50)
-    print("🤖 VK Bot Worker для Лазерная Мастерская CRM")
-    print("📊 Фаза 3: Склад, Кэшбек, Роли, PWA, AI")
-    print("=" * 50)
+💰 Стоимость: {price} ₽
+
+Подтверждаете заказ?"""
+                self.send_message(user_id, message, keyboard)
+            except ValueError:
+                self.send_message(user_id, "❌ Ошибка: введите целое число", self.get_cancel_keyboard())
     
-    bot = VKBotWorker()
-    bot.start()
+    def handle_events(self):
+        """Main event loop for Long Poll"""
+        logger.info("Starting Long Poll event loop...")
+        
+        for event in self.longpoll.listen():
+            try:
+                if event.type == VkEventType.MESSAGE_NEW:
+                    user_id = event.user_id
+                    text = event.text.lower().strip()
+                    
+                    # Get user info
+                    user = db.get_or_create_user(user_id)
+                    role = db.get_user_role(user_id)
+                    first_name = user.get('name', 'Пользователь')
+                    
+                    # Check if user is in dialog state
+                    if user_id in user_states:
+                        state = user_states[user_id]
+                        
+                        # Handle cancel
+                        if text == 'отмена' or text == '❌ отмена':
+                            del user_states[user_id]
+                            self.send_message(
+                                user_id, 
+                                "❌ Заказ отменён.", 
+                                self.get_main_keyboard(role)
+                            )
+                            continue
+                        
+                        # Handle confirmation
+                        if state.get('step') == 'confirm':
+                            if text in ['да', '✅ да']:
+                                order = db.create_order(user_id, state)
+                                del user_states[user_id]
+                                
+                                message = f"""✅ Заказ создан!
+Номер: {order['order_number']}
+Сумма: {order['final_price']} ₽
+Статус: {order['status']}
+
+Вам начислено {order['final_price'] * 0.05:.2f} ₽ кэшбека."""
+                                self.send_message(user_id, message, self.get_main_keyboard(role))
+                                
+                                # Notify admins
+                                for admin_id in ADMIN_IDS:
+                                    if admin_id != user_id:
+                                        self.send_message(
+                                            admin_id,
+                                            f"🔔 Новый заказ #{order['order_number']} от {first_name}\nСумма: {order['final_price']} ₽",
+                                            self.get_main_keyboard('admin')
+                                        )
+                            else:
+                                del user_states[user_id]
+                                self.send_message(user_id, "❌ Заказ отменён.", self.get_main_keyboard(role))
+                            continue
+                        
+                        # Process order steps
+                        self.process_order_step(user_id, event.text)
+                        continue
+                    
+                    # Main menu commands
+                    if text in ['/start', 'начать', 'привет']:
+                        self.handle_start_command(user_id, first_name)
+                    
+                    elif text == '📝 новый заказ':
+                        self.handle_new_order(user_id)
+                    
+                    elif text == '📦 мои заказы':
+                        self.handle_my_orders(user_id)
+                    
+                    elif text == '💰 мой кэшбек':
+                        self.handle_cashback(user_id)
+                    
+                    elif text == 'ℹ️ помощь':
+                        self.handle_help(user_id)
+                    
+                    # Admin commands
+                    elif role == 'admin':
+                        if text == '📊 все заказы':
+                            self.handle_admin_all_orders(user_id)
+                        elif text == '✅ подтвердить заказ':
+                            self.send_message(user_id, "Введите номер заказа для подтверждения:", self.get_cancel_keyboard())
+                            user_states[user_id] = {'step': 'admin_confirm_order'}
+                        elif text == '📦 склад':
+                            self.handle_admin_stock(user_id)
+                        elif text == '📈 статистика':
+                            self.handle_admin_statistics(user_id)
+                        elif text == '📢 рассылка':
+                            self.send_message(user_id, "Введите текст рассылки:", self.get_cancel_keyboard())
+                            user_states[user_id] = {'step': 'admin_broadcast'}
+                        elif text == '⚙️ настройки':
+                            self.send_message(user_id, "⚙️ Настройки в разработке", self.get_main_keyboard('admin'))
+                    
+                    # Admin special states
+                    elif user_id in user_states:
+                        state = user_states[user_id]
+                        if state.get('step') == 'admin_confirm_order':
+                            # Simplified: just mark as confirmed
+                            self.send_message(user_id, f"✅ Заказ {event.text} подтверждён (демо режим)", self.get_main_keyboard('admin'))
+                            del user_states[user_id]
+                        elif state.get('step') == 'admin_broadcast':
+                            # Send broadcast to all clients
+                            conn = db.get_connection()
+                            cursor = conn.cursor()
+                            cursor.execute('SELECT vk_id FROM users WHERE role = ?', ('client',))
+                            clients = cursor.fetchall()
+                            conn.close()
+                            
+                            count = 0
+                            for client in clients:
+                                try:
+                                    self.send_message(client[0], f"📢 Важное сообщение:\n\n{event.text}")
+                                    count += 1
+                                except:
+                                    pass
+                            
+                            self.send_message(user_id, f"✅ Рассылка отправлена {count} клиентам", self.get_main_keyboard('admin'))
+                            del user_states[user_id]
+            
+            except Exception as e:
+                logger.error(f"Error processing event: {e}", exc_info=True)
+
+def main():
+    """Main function"""
+    if not VK_TOKEN:
+        logger.error("VK_TOKEN not found in environment variables!")
+        sys.exit(1)
+    
+    bot = VKBot(VK_TOKEN)
     
     try:
-        while True:
-            time.sleep(1)
+        bot.handle_events()
     except KeyboardInterrupt:
-        bot.running = False
-        print("\n🛑 Бот остановлен пользователем")
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot error: {e}", exc_info=True)
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
