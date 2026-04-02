@@ -1,0 +1,15 @@
+[Unit]
+Description=Laser Workshop VK Bot Lesnoy
+After=network.target laser-workshop.service
+
+[Service]
+Type=simple
+User=andor
+WorkingDirectory=/home/andor/laser-workshop-crm
+Environment="PATH=/home/andor/laser-workshop-crm/venv/bin"
+ExecStart=/home/andor/laser-workshop-crm/venv/bin/python3 bot_worker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

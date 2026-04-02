@@ -1,0 +1,7 @@
+sudo systemctl daemon-reload
+sudo systemctl enable laser-workshop.service laser-bot.service
+sudo systemctl start laser-workshop.service laser-bot.service
+sudo systemctl status laser-workshop.service laser-bot.service
+
+sudo systemctl restart laser-workshop.service laser-bot.service
+sudo systemctl status laser-workshop.service laser-bot.service

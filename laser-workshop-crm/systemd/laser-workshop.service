@@ -1,0 +1,15 @@
+[Unit]
+Description=Laser Workshop CRM Lesnoy
+After=network.target
+
+[Service]
+Type=simple
+User=andor
+WorkingDirectory=/home/andor/laser-workshop-crm
+Environment="PATH=/home/andor/laser-workshop-crm/venv/bin"
+ExecStart=/home/andor/laser-workshop-crm/venv/bin/python3 app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
