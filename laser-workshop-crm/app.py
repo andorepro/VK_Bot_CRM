@@ -786,9 +786,9 @@ def login_page():
             log_audit(user['id'], 'login', 'user', user['id'])
             return response
         else:
-            return render_template('index.html', error='Неверный логин или пароль')
+            return render_template('login.html', error='Неверный логин или пароль')
 
-    return render_template('index.html')
+    return render_template('login.html')
 @app.route('/logout')
 def logout():
     response = make_response(redirect(url_for('login_page')))
