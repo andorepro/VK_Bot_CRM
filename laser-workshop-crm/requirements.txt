@@ -16,3 +16,6 @@ vk_api==11.10.0
 Werkzeug==3.1.8
 bcrypt==4.1.2
 gunicorn==21.2.0
+scikit-learn==1.6.1
+pandas==2.2.3
+numpy==2.2.4

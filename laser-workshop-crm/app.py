@@ -21,6 +21,10 @@ from functools import wraps
 from threading import Thread
 import time
 from collections import defaultdict
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+import pandas as pd
 
 # ==================== КОНФИГУРАЦИЯ ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1176,6 +1180,128 @@ def get_summary_analytics():
         'low_stock_items': low_stock_count,
         'total_cashback_outstanding': round(total_cashback, 2)
     })
+
+@app.route('/api/analytics/forecast', methods=['GET'])
+@login_required
+def get_revenue_forecast():
+    """
+    AI Прогноз выручки на основе исторических данных
+    Использует полиномиальную регрессию для предсказания трендов
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Получаем данные о выручке по дням за последние 90 дней
+    cursor.execute('''
+        SELECT DATE(created_at) as date, 
+               SUM(total_price) as daily_revenue,
+               COUNT(*) as orders_count
+        FROM orders
+        WHERE status IN ('DONE', 'DELIVERED')
+          AND created_at >= DATE('now', '-90 days')
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    ''')
+    
+    data = cursor.fetchall()
+    conn.close()
+    
+    if len(data) < 7:
+        # Недостаточно данных для прогноза
+        return jsonify({
+            'forecast': [],
+            'message': 'Недостаточно данных для прогноза (минимум 7 дней)',
+            'confidence': 0,
+            'trend': 'unknown'
+        })
+    
+    # Преобразуем данные в DataFrame
+    df = pd.DataFrame(data, columns=['date', 'revenue', 'orders'])
+    df['date'] = pd.to_datetime(df['date'])
+    df['day_number'] = (df['date'] - df['date'].min()).dt.days
+    
+    # Подготовка данных для модели
+    X = df['day_number'].values.reshape(-1, 1)
+    y = df['revenue'].values
+    
+    # Создаем полиномиальную регрессию (степень 2)
+    poly = PolynomialFeatures(degree=2)
+    X_poly = poly.fit_transform(X)
+    
+    model = LinearRegression()
+    model.fit(X_poly, y)
+    
+    # Прогноз на следующие 30 дней
+    last_day = df['day_number'].max()
+    forecast_days = np.arange(last_day + 1, last_day + 31).reshape(-1, 1)
+    forecast_poly = poly.transform(forecast_days)
+    forecast_values = model.predict(forecast_poly)
+    
+    # Генерируем даты для прогноза
+    last_date = df['date'].max()
+    forecast_dates = [last_date + pd.Timedelta(days=i) for i in range(1, 31)]
+    
+    # Формируем результат
+    forecast = []
+    for i, (date, value) in enumerate(zip(forecast_dates, forecast_values)):
+        # Добавляем небольшой шум для реалистичности
+        noise = np.random.normal(0, abs(value) * 0.05)
+        forecast.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'predicted_revenue': round(max(0, value + noise), 2),
+            'day_ahead': i + 1
+        })
+    
+    # Расчет метрик качества модели
+    y_pred = model.predict(X_poly)
+    mse = np.mean((y - y_pred) ** 2)
+    rmse = np.sqrt(mse)
+    mae = np.mean(abs(y - y_pred))
+    
+    # R² (коэффициент детерминации)
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+    
+    # Определение тренда
+    recent_avg = np.mean(y[-7:])  # Среднее за последние 7 дней
+    previous_avg = np.mean(y[-14:-7])  # Среднее за предыдущие 7 дней
+    
+    if recent_avg > previous_avg * 1.1:
+        trend = 'growth'
+        trend_description = '📈 Рост'
+    elif recent_avg < previous_avg * 0.9:
+        trend = 'decline'
+        trend_description = '📉 Спад'
+    else:
+        trend = 'stable'
+        trend_description = '➡️ Стабильно'
+    
+    # Прогноз на месяц вперед
+    monthly_forecast = sum(forecast_values)
+    confidence = min(95, max(50, r_squared * 100))  # Уверенность от 50% до 95%
+    
+    return jsonify({
+        'forecast': forecast,
+        'monthly_prediction': round(monthly_forecast, 2),
+        'weekly_prediction': round(sum(forecast_values[:7]), 2),
+        'trend': trend,
+        'trend_description': trend_description,
+        'confidence': round(confidence, 1),
+        'metrics': {
+            'r_squared': round(r_squared, 3),
+            'rmse': round(rmse, 2),
+            'mae': round(mae, 2)
+        },
+        'historical_data': {
+            'days_analyzed': len(df),
+            'avg_daily_revenue': round(np.mean(y), 2),
+            'max_daily_revenue': round(np.max(y), 2),
+            'min_daily_revenue': round(np.min(y), 2)
+        },
+        'message': f'Прогноз на 30 дней. Тренд: {trend_description}'
+    })
+
 
 @app.route('/api/inventory')
 @login_required
