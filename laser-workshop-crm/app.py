@@ -367,10 +367,10 @@ def init_db():
     print("✅ Database initialized successfully")
 
 # ==================== JWT АВТОРИЗАЦИЯ ====================
-def generate_token(username, role='manager'):
+def generate_token(user_id, role='manager'):
     """Генерация JWT токена"""
     payload = {
-        'username': username,
+        'user_id': user_id,
         'role': role,
         'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
     }
@@ -784,7 +784,7 @@ def login_page():
         conn.close()
 
         if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
-            token = generate_token(username, user['role'])
+            token = generate_token(user['id'], user['role'])
             response = make_response(redirect(url_for('index')))
             response.set_cookie('auth_token', token, max_age=604800)
             log_audit(user['id'], 'login', 'user', user['id'])
@@ -793,6 +793,70 @@ def login_page():
             return render_template('login.html', error='Неверный логин или пароль')
 
     return render_template('login.html')
+
+@app.route('/api/auth/check')
+@login_required
+def check_auth():
+    """Проверка текущей аутентификации"""
+    token = request.cookies.get('auth_token')
+    if not token:
+        return jsonify({'authenticated': False})
+    
+    try:
+        data = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        return jsonify({
+            'authenticated': True,
+            'username': data['username'],
+            'role': data['role'],
+            'user_id': data['user_id']
+        })
+    except jwt.ExpiredSignatureError:
+        return jsonify({'authenticated': False}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'authenticated': False}), 401
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    """API эндпоинт для входа (используется JavaScript)"""
+    data = request.get_json()
+    username = data.get('username', '')
+    password = data.get('password', '')
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    user = cursor.fetchone()
+    conn.close()
+    
+    if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+        token = generate_token(user['id'], user['role'])
+        response = make_response(jsonify({
+            'success': True,
+            'token': token,
+            'username': user['username'],
+            'role': user['role']
+        }))
+        response.set_cookie('auth_token', token, max_age=604800, httponly=True, samesite='Lax')
+        log_audit(user['id'], 'login', 'user', user['id'])
+        return response
+    else:
+        return jsonify({'success': False, 'error': 'Неверный логин или пароль'}), 401
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_logout():
+    """API эндпоинт для выхода"""
+    token = request.cookies.get('auth_token')
+    if token:
+        try:
+            data = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+            log_audit(data.get('user_id'), 'logout', 'user', data.get('user_id'))
+        except:
+            pass
+    
+    response = make_response(jsonify({'success': True}))
+    response.delete_cookie('auth_token')
+    return response
+
 @app.route('/logout')
 def logout():
     response = make_response(redirect(url_for('login_page')))

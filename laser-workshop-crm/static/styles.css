@@ -24,6 +24,10 @@ body {
   line-height: 1.5;
 }
 
+body.login-page {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
 /* ==================== LOGIN PAGE ==================== */
 .login-container {
   display: flex;
