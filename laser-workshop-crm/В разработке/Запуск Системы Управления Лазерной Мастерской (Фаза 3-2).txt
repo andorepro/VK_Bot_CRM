@@ -1,0 +1,806 @@
+# 🚀 Запуск Системы Управления Лазерной Мастерской (Фаза 3-2)
+
+## 📋 Обзор новых функций Фазы 3-2
+
+| Функция | Описание | Статус |
+|---------|----------|--------|
+| **Складской учет** | Полный учёт материалов с индикаторами | ✅ |
+| **Кэшбек система** | 5% кэшбек, использование до 30% | ✅ |
+| **Роли пользователей** | admin / manager / master | ✅ |
+| **PWA** | Установка как приложение на телефон | ✅ |
+| **Офлайн режим** | Service Worker + кэш + индикация | ✅ |
+| **AI прогнозы** | Прогноз выручки с трендом | ✅ |
+| **Интеграции UI** | Панель настройки (1C, СДЭК, YooKassa) | ✅ |
+| **Аудит лог** | Журнал всех действий | ✅ |
+| **4 графика Chart.js** | Выручка, услуги, сегменты, склад | ✅ |
+
+---
+
+## 🍓 ВАРИАНТ 1: Запуск на Raspberry Pi 3 B+
+
+### 1.1 Подготовка системы
+
+```bash
+# Обновление системы
+sudo apt update && sudo apt upgrade -y
+
+# Установка Python 3 и зависимостей
+sudo apt install -y python3 python3-pip python3-venv git sqlite3
+
+# Создание директории проекта
+mkdir -p ~/laser-workshop-phase3
+cd ~/laser-workshop-phase3
+
+# Создание виртуального окружения
+python3 -m venv venv
+source venv/bin/activate
+
+# Установка зависимостей
+pip install flask pyjwt requests
+```
+
+### 1.2 Размещение файлов
+
+```bash
+# Структура проекта
+laser-workshop-phase3/
+├── app.py                    # Flask сервер (Фаза 3)
+├── bot_worker.py             # VK бот (Фаза 3)
+├── templates/
+│   └── index.html           # Web-интерфейс (Фаза 3)
+├── static/                   # Статические файлы (PWA)
+│   ├── icon-192.png
+│   └── icon-512.png
+├── backups/                  # Папка для бэкапов
+└── venv/                     # Виртуальное окружение
+```
+
+```bash
+# Копирование файлов
+cp app(фаза 3).py app.py
+cp bot_worker(фаза 3).py bot_worker.py
+mkdir -p templates static backups
+cp index(фаза 3).html templates/index.html
+```
+
+### 1.3 Настройка VK API
+
+```bash
+# Редактирование app.py и bot_worker.py
+nano app.py
+nano bot_worker.py
+
+# Заменить строки в обоих файлах:
+VK_TOKEN = 'YOUR_VK_TOKEN_HERE'      # → Ваш токен VK
+VK_GROUP_ID = 'YOUR_GROUP_ID'        # → ID вашей группы
+```
+
+**Получение токена VK:**
+1. Зайдите на https://vk.com/dev
+2. Создайте Standalone-приложение
+3. Получите Access Token с правами: `messages`, `offline`
+4. ID группы: https://vk.com/clubXXXXXXXXX (число после club)
+
+### 1.4 Настройка автозапуска (systemd)
+
+```bash
+# Создание сервиса для Flask
+sudo nano /etc/systemd/system/laser-workshop.service
+```
+
+```ini
+[Unit]
+Description=Laser Workshop CRM Phase 3
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/laser-workshop-phase3
+Environment="PATH=/home/pi/laser-workshop-phase3/venv/bin"
+ExecStart=/home/pi/laser-workshop-phase3/venv/bin/python3 app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Создание сервиса для бота
+sudo nano /etc/systemd/system/laser-bot.service
+```
+
+```ini
+[Unit]
+Description=Laser Workshop VK Bot Phase 3
+After=network.target laser-workshop.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/laser-workshop-phase3
+Environment="PATH=/home/pi/laser-workshop-phase3/venv/bin"
+ExecStart=/home/pi/laser-workshop-phase3/venv/bin/python3 bot_worker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Включение сервисов
+sudo systemctl daemon-reload
+sudo systemctl enable laser-workshop.service
+sudo systemctl enable laser-bot.service
+sudo systemctl start laser-workshop.service
+sudo systemctl start laser-bot.service
+
+# Проверка статуса
+sudo systemctl status laser-workshop.service
+sudo systemctl status laser-bot.service
+```
+
+### 1.5 Оптимизация для Raspberry Pi
+
+```bash
+# Увеличение swap файла (для 1GB RAM)
+sudo dphys-swapfile swapoff
+sudo sed -i 's/CONF_SWAPSIZE=100/CONF_SWAPSIZE=1024/' /etc/dphys-swapfile
+sudo dphys-swapfile setup
+sudo dphys-swapfile swapon
+
+# Отключение лишних сервисов
+sudo systemctl disable bluetooth
+sudo systemctl disable triggerhappy
+```
+
+### 1.6 Настройка сети
+
+```bash
+# Узнать IP адрес
+hostname -I
+
+# Настройка статического IP (опционально)
+sudo nano /etc/dhcpcd.conf
+```
+
+```ini
+interface eth0
+static ip_address=192.168.1.100/24
+static routers=192.168.1.1
+static domain_name_servers=8.8.8.8 1.1.1.1
+```
+
+```bash
+sudo systemctl restart dhcpcd
+```
+
+---
+
+## 🪟 ВАРИАНТ 2: Запуск на Windows Desktop
+
+### 2.1 Установка Python
+
+```powershell
+# Скачать Python 3.11+ с https://python.org
+# При установке勾选 "Add Python to PATH"
+
+# Проверка установки
+python --version
+pip --version
+```
+
+### 2.2 Установка проекта
+
+```powershell
+# Создание директории
+mkdir C:\laser-workshop-phase3
+cd C:\laser-workshop-phase3
+
+# Создание виртуального окружения
+python -m venv venv
+
+# Активация виртуального окружения
+.\venv\Scripts\Activate.ps1
+
+# Установка зависимостей
+pip install flask pyjwt requests
+```
+
+### 2.3 Размещение файлов
+
+```
+C:\laser-workshop-phase3\
+├── app.py
+├── bot_worker.py
+├── templates\
+│   └── index.html
+├── static\
+│   ├── icon-192.png
+│   └── icon-512.png
+├── backups\
+└── venv\
+```
+
+```powershell
+# Копирование файлов
+Copy-Item "app(фаза 3).py" -Destination "app.py"
+Copy-Item "bot_worker(фаза 3).py" -Destination "bot_worker.py"
+New-Item -ItemType Directory -Path "templates","static","backups" -Force
+Copy-Item "index(фаза 3).html" -Destination "templates\index.html"
+```
+
+### 2.4 Настройка VK API
+
+```powershell
+# Отредактировать app.py и bot_worker.py
+# Заменить:
+VK_TOKEN = 'YOUR_VK_TOKEN_HERE'
+VK_GROUP_ID = 'YOUR_GROUP_ID'
+```
+
+### 2.5 Автозапуск на Windows
+
+```powershell
+# Создание batch-файла
+notepad start_workshop.bat
+```
+
+```batch
+@echo off
+cd /d C:\laser-workshop-phase3
+call venv\Scripts\activate.bat
+start "Laser Workshop" python app.py
+start "VK Bot" python bot_worker.py
+```
+
+```powershell
+# Добавление в автозагрузку
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\LaserWorkshop.lnk")
+$Shortcut.TargetPath = "C:\laser-workshop-phase3\start_workshop.bat"
+$Shortcut.Save()
+```
+
+### 2.6 Настройка брандмауэра
+
+```powershell
+# Разрешение порта 5000
+New-NetFirewallRule -DisplayName "Laser Workshop" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
+```
+
+---
+
+## 🎯 ЗАПУСК СИСТЕМЫ
+
+### Raspberry Pi
+
+```bash
+# Ручной запуск (для тестирования)
+cd ~/laser-workshop-phase3
+source venv/bin/activate
+python app.py
+# В отдельном окне:
+python bot_worker.py
+
+# Через systemd (production)
+sudo systemctl start laser-workshop.service
+sudo systemctl start laser-bot.service
+```
+
+### Windows
+
+```powershell
+# Ручной запуск
+cd C:\laser-workshop-phase3
+.\venv\Scripts\Activate.ps1
+python app.py
+# В отдельном окне:
+python bot_worker.py
+
+# Или через batch-файл
+.\start_workshop.bat
+```
+
+---
+
+## 🌐 ДОСТУП К СИСТЕМЕ
+
+| Платформа | URL |
+|-----------|-----|
+| **Локально** | http://localhost:5000 |
+| **В сети (Pi)** | http://192.168.1.100:5000 |
+| **В сети (Windows)** | http://[ВАШ_IP]:5000 |
+
+**Учётные данные по умолчанию:**
+
+| Логин | Пароль | Роль |
+|-------|--------|------|
+| `admin` | `admin123` | admin |
+| `manager1` | `manager123` | manager |
+| `master1` | `master123` | master |
+
+---
+
+## ✅ ПРОВЕРКА РАБОТОСПОСОБНОСТИ
+
+### Тест API
+
+```bash
+# Raspberry Pi
+curl http://localhost:5000/api/price_list
+curl http://localhost:5000/api/analytics/summary
+curl http://localhost:5000/api/inventory
+
+# Windows PowerShell
+Invoke-WebRequest http://localhost:5000/api/price_list
+Invoke-WebRequest http://localhost:5000/api/analytics/summary
+```
+
+### Проверка сервисов (Pi)
+
+```bash
+sudo systemctl status laser-workshop.service
+sudo systemctl status laser-bot.service
+sudo journalctl -u laser-workshop.service -n 50
+```
+
+### Проверка процессов (Windows)
+
+```powershell
+tasklist | findstr python
+netstat -an | findstr 5000
+```
+
+### Проверка новых функций Фазы 3
+
+```bash
+# Проверка склада
+curl http://localhost:5000/api/inventory
+
+# Проверка AI прогнозов
+curl http://localhost:5000/api/ai/predictions
+
+# Проверка интеграций (только admin)
+curl http://localhost:5000/api/integrations
+
+# Проверка аудита (только admin)
+curl http://localhost:5000/api/audit-log
+```
+
+---
+
+## 📊 НОВЫЕ API ENDPOINTS (Фаза 3)
+
+| Endpoint | Метод | Роль | Описание |
+|----------|-------|------|----------|
+| `/api/inventory` | GET | all | Список товаров склада |
+| `/api/inventory/update` | POST | admin, manager | Обновление товара |
+| `/api/inventory/low-stock` | GET | all | Товары с низким остатком |
+| `/api/cashback/history/<id>` | GET | all | История кэшбека клиента |
+| `/api/integrations` | GET | admin | Список интеграций |
+| `/api/integrations/configure` | POST | admin | Настройка интеграции |
+| `/api/ai/predictions` | GET | all | AI прогнозы выручки |
+| `/api/audit-log` | GET | admin | Журнал аудита |
+| `/api/users` | GET | admin | Список пользователей |
+| `/api/user/create` | POST | admin | Создание пользователя |
+| `/api/payment/yookassa` | POST | all | Создание платежа |
+| `/api/delivery/cdek` | POST | all | Расчёт доставки СДЭК |
+
+---
+
+## 🔧 МОНИТОРИНГ И ОБСЛУЖИВАНИЕ
+
+### Raspberry Pi
+
+```bash
+# Просмотр логов
+sudo journalctl -u laser-workshop.service -f
+sudo journalctl -u laser-bot.service -f
+
+# Перезапуск сервисов
+sudo systemctl restart laser-workshop.service
+sudo systemctl restart laser-bot.service
+
+# Остановка
+sudo systemctl stop laser-workshop.service
+sudo systemctl stop laser-bot.service
+
+# Мониторинг ресурсов
+top -bn1 | grep "Cpu(s)"
+free -h
+df -h /
+vcgencmd measure_temp
+```
+
+### Windows
+
+```powershell
+# Просмотр процессов
+Get-Process python
+
+# Остановка
+taskkill /F /IM python.exe
+
+# Перезапуск
+.\start_workshop.bat
+```
+
+---
+
+## 💾 РЕЗЕРВНОЕ КОПИРОВАНИЕ
+
+### Автоматический бэкап (Pi)
+
+```bash
+# Cron job для ежедневного бэкапа
+crontab -e
+
+# Добавить строку (бэкап в 3:00 ночи)
+0 3 * * * /home/pi/laser-workshop-phase3/venv/bin/python3 -c "import shutil; import datetime; shutil.copy('/home/pi/laser-workshop-phase3/workshop.db', '/home/pi/laser-workshop-phase3/backups/backup_' + datetime.datetime.now().strftime('%Y%m%d') + '.db')"
+```
+
+### Ручной бэкап
+
+```bash
+# Raspberry Pi
+cd ~/laser-workshop-phase3
+cp workshop.db backups/workshop_backup_$(date +%Y%m%d_%H%M%S).db
+
+# Windows
+copy C:\laser-workshop-phase3\workshop.db C:\laser-workshop-phase3\backups\workshop_backup_%date:~-4,4%%date:~-7,2%%date:~-10,2%.db
+```
+
+### Через Web-интерфейс
+
+1. Войти в систему как admin
+2. Нажать кнопку **"💾 Бэкап"**
+3. Файл скачается автоматически
+
+---
+
+## 📦 УПРАВЛЕНИЕ СКЛАДОМ (Фаза 3)
+
+### Добавление товаров через БД
+
+```bash
+# Raspberry Pi
+sqlite3 workshop.db
+
+# Windows
+.\venv\Scripts\python.exe
+>>> import sqlite3
+>>> conn = sqlite3.connect('workshop.db')
+>>> conn.execute("INSERT INTO inventory (item_name, item_type, quantity, unit, min_quantity, price_per_unit, supplier) VALUES ('Тест', 'material', 100, 'шт', 10, 500, 'Поставщик')")
+>>> conn.commit()
+```
+
+### Проверка низких остатков
+
+```bash
+curl http://localhost:5000/api/inventory/low-stock
+```
+
+### Списание материалов
+
+Автоматически происходит при смене статуса заказа на `DONE`:
+- Фанера/Дерево → списывается 1 единица
+- Акрил/Металл → списывается 1 единица
+- Фляжки/Жетоны → списывается 1 единица
+
+---
+
+## 💰 КЭШБЕК СИСТЕМА (Фаза 3)
+
+### Начисление кэшбека
+
+- **5%** от суммы заказа автоматически начисляется при статусе `DONE`
+- Максимум **30%** от суммы можно использовать кэшбеком
+- Кэшбек отображается в профиле клиента
+
+### Проверка кэшбека клиента
+
+```bash
+curl http://localhost:5000/api/client/<client_id>
+```
+
+### История кэшбек-транзакций
+
+```bash
+curl http://localhost:5000/api/cashback/history/<client_id>
+```
+
+---
+
+## 👥 УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (Фаза 3)
+
+### Роли и права
+
+| Роль | Права |
+|------|-------|
+| **admin** | Полный доступ, управление пользователями, интеграциями, аудитом |
+| **manager** | Управление заказами, складом, клиентами |
+| **master** | Просмотр заказов, обновление статусов |
+
+### Создание нового пользователя
+
+```bash
+# Через API (только admin)
+curl -X POST http://localhost:5000/api/user/create \
+  -H "Content-Type: application/json" \
+  -H "Cookie: auth_token=YOUR_TOKEN" \
+  -d '{"username":"newuser","password":"password123","role":"manager"}'
+```
+
+### Просмотр журнала аудита
+
+```bash
+# Через API (только admin)
+curl http://localhost:5000/api/audit-log
+```
+
+---
+
+## 🤖 AI ПРОГНОЗЫ (Фаза 3)
+
+### Получение прогноза выручки
+
+```bash
+curl http://localhost:5000/api/ai/predictions
+```
+
+### Формат ответа
+
+```json
+{
+  "type": "revenue_weekly",
+  "prediction": 50000.00,
+  "confidence": 0.75,
+  "trend": "up"
+}
+```
+
+### Требования для прогнозов
+
+- Минимум **7 дней** истории заказов
+- Для тренда — **14 дней** истории
+- Прогноз обновляется при каждом запросе
+
+---
+
+## 🔌 ИНТЕГРАЦИИ (Фаза 3)
+
+### Настройка интеграций
+
+```bash
+# Через API (только admin)
+curl -X POST http://localhost:5000/api/integrations/configure \
+  -H "Content-Type: application/json" \
+  -H "Cookie: auth_token=YOUR_TOKEN" \
+  -d '{"service_name":"YooKassa","api_key":"YOUR_KEY","api_secret":"YOUR_SECRET","is_active":1}'
+```
+
+### Доступные интеграции
+
+| Сервис | Статус | Описание |
+|--------|--------|----------|
+| **1C** | ⏳ | Синхронизация заказов |
+| **МойСклад** | ⏳ | Синхронизация склада |
+| **СДЭК** | ✅ | Расчёт доставки |
+| **YooKassa** | ✅ | Приём платежей |
+
+---
+
+## 📱 PWA (Progressive Web App)
+
+### Установка на устройство
+
+1. Откройте `http://[IP]:5000` в браузере
+2. Нажмите **"Установить приложение"** (появится автоматически)
+3. Приложение появится на рабочем столе
+
+### Офлайн режим
+
+- При потере соединения появится индикатор
+- Данные кэшируются локально
+- Синхронизация при восстановлении соединения
+
+### Файлы для PWA
+
+```
+static/
+├── icon-192.png    # Иконка 192x192
+├── icon-512.png    # Иконка 512x512
+manifest.json       # Манифест приложения
+sw.js              # Service Worker
+```
+
+---
+
+## ⚠️ РЕШЕНИЕ ПРОБЛЕМ
+
+| Проблема | Решение |
+|----------|---------|
+| **Port 5000 занят** | Изменить порт в `app.run(port=5001)` |
+| **VK бот не работает** | Проверить токен и права доступа |
+| **БД не создаётся** | Проверить права на запись в папку |
+| **Нет доступа из сети** | Проверить брандмауэр и IP |
+| **PWA не устанавливается** | Проверить HTTPS (требуется для PWA) |
+| **AI прогнозы пустые** | Нужно минимум 7 дней истории |
+| **Склад не списывается** | Проверить названия услуг в БД |
+| **Кэшбек не начисляется** | Статус заказа должен быть DONE |
+
+### Диагностика БД
+
+```bash
+# Raspberry Pi
+sqlite3 workshop.db ".tables"
+sqlite3 workshop.db "SELECT * FROM inventory;"
+sqlite3 workshop.db "SELECT * FROM promo_codes;"
+
+# Windows
+.\venv\Scripts\python.exe
+>>> import sqlite3
+>>> conn = sqlite3.connect('workshop.db')
+>>> conn.execute("SELECT * FROM inventory").fetchall()
+```
+
+### Восстановление БД
+
+```bash
+# Raspberry Pi
+cd ~/laser-workshop-phase3
+cp backups/workshop_backup_YYYYMMDD.db workshop.db
+sudo systemctl restart laser-workshop.service
+
+# Windows
+cd C:\laser-workshop-phase3
+copy backups\workshop_backup_YYYYMMDD.db workshop.db
+# Перезапустить сервисы
+```
+
+### Сброс пароля admin
+
+```bash
+# Raspberry Pi
+sqlite3 workshop.db
+UPDATE users SET password_hash = 'хеш_нового_пароля' WHERE username = 'admin';
+
+# Генерация хеша
+python3 -c "import hashlib; print(hashlib.sha256('новый_пароль'.encode()).hexdigest())"
+```
+
+---
+
+## 📈 ОЖИДАЕМАЯ ПРОИЗВОДИТЕЛЬНОСТЬ
+
+| Метрика | Raspberry Pi 3 B+ | Windows Desktop |
+|---------|------------------|-----------------|
+| **Запуск сервера** | ~5-7 секунд | ~2-3 секунды |
+| **Использование RAM** | ~200-250 MB | ~150-200 MB |
+| **Отклик API** | ~50-100 ms | ~20-50 ms |
+| **Одновременных клиентов** | до 10 | до 50+ |
+| **Бот (сообщения/мин)** | ~20-30 | ~50-100 |
+| **AI прогноз** | ~100-200 ms | ~50-100 ms |
+
+---
+
+## ✅ ЧЕК-ЛИСТ ЗАПУСКА ФАЗЫ 3
+
+### Обязательные шаги
+- [ ] Python 3.11+ установлен
+- [ ] Виртуальное окружение создано
+- [ ] Зависимости установлены (`flask pyjwt requests`)
+- [ ] Файлы Phase 3 скопированы
+- [ ] VK токен настроен в `app.py` и `bot_worker.py`
+- [ ] Папка `templates/` создана
+- [ ] Папка `static/` создана (для PWA)
+- [ ] Порт 5000 открыт в брандмауэре
+
+### Опциональные шаги
+- [ ] systemd сервисы настроены (Pi)
+- [ ] Автозапуск настроен (Windows)
+- [ ] Статический IP настроен
+- [ ] Cron бэкапы настроены
+- [ ] Мониторинг ресурсов настроен
+- [ ] PWA иконки добавлены в `static/`
+
+### Проверка после запуска
+- [ ] Web-интерфейс открывается
+- [ ] Логин/пароль работают (admin/manager/master)
+- [ ] VK бот отвечает на сообщения
+- [ ] Промокоды создаются
+- [ ] Календарь отображает заказы
+- [ ] Аналитика показывает данные
+- [ ] Склад отображается
+- [ ] Кэшбек начисляется
+- [ ] AI прогнозы работают
+- [ ] Аудит лог записывается
+
+---
+
+## 🎯 ГОТОВО К РАБОТЕ!
+
+```bash
+# Финальная проверка
+curl http://localhost:5000/api/analytics/summary
+```
+
+**Доступ к панели:**
+- URL: `http://localhost:5000` (или IP в сети)
+- Логин: `admin`
+- Пароль: `admin123`
+
+**Система Фаза 3 готова к production-использованию!** 🚀
+
+---
+
+## 📞 ПОДДЕРЖКА
+
+При возникновении проблем:
+
+1. **Проверьте логи сервисов**
+   ```bash
+   sudo journalctl -u laser-workshop.service -n 100
+   ```
+
+2. **Убедитесь что VK токен действителен**
+   - Проверьте права доступа
+   - Проверьте срок действия токена
+
+3. **Проверьте права доступа к папкам**
+   ```bash
+   ls -la ~/laser-workshop-phase3/
+   chmod -R 755 ~/laser-workshop-phase3/
+   ```
+
+4. **Восстановите БД из бэкапа при необходимости**
+   ```bash
+   cp backups/workshop_backup_YYYYMMDD.db workshop.db
+   ```
+
+5. **Перезапустите сервисы**
+   ```bash
+   sudo systemctl restart laser-workshop.service
+   sudo systemctl restart laser-bot.service
+   ```
+
+---
+
+## 🔄 ОБНОВЛЕНИЕ С ФАЗЫ 2 ДО ФАЗЫ 3
+
+```bash
+# 1. Остановите сервисы
+sudo systemctl stop laser-workshop.service
+sudo systemctl stop laser-bot.service
+
+# 2. Сделайте бэкап
+cd ~/laser-workshop-phase2
+cp workshop.db workshop_backup_before_phase3.db
+
+# 3. Обновите файлы
+cp app(фаза 3).py ~/laser-workshop-phase2/app.py
+cp bot_worker(фаза 3).py ~/laser-workshop-phase2/bot_worker.py
+cp -r templates/ ~/laser-workshop-phase2/
+mkdir -p ~/laser-workshop-phase2/static
+
+# 4. Обновите зависимости
+source venv/bin/activate
+pip install --upgrade flask pyjwt requests
+
+# 5. Запустите (БД обновится автоматически)
+python app.py
+
+# 6. Проверьте новые таблицы
+sqlite3 workshop.db ".tables"
+
+# 7. Перезапустите сервисы
+sudo systemctl start laser-workshop.service
+sudo systemctl start laser-bot.service
+```
+
+---
+
+**Успешного запуска!** 🎉
