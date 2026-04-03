@@ -1,13 +1,9 @@
 ```
-# Compiled Python files
-*.pyc
-__pycache__/
+# SSL/TLS certificates
+*.crt
+*.key
 
-# Database files
-*.db
-
-# Environment files
-.env
-.env.local
-*.env.*
+# SQLite WAL files
+*.db-shm
+*.db-wal
 ```

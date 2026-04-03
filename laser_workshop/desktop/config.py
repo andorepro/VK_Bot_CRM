@@ -5,12 +5,15 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
+# Базовая директория
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 class Config:
     """Класс конфигурации приложения для Desktop"""
     
     # Основные настройки
     SECRET_KEY = os.getenv('SECRET_KEY', 'laser_workshop_desktop_secret_key_2026_change_this')
-    DEBUG_MODE = os.getenv('DEBUG_MODE', 'True').lower() in ('true', '1', 'yes')
+    DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() in ('true', '1', 'yes')
     HOST = os.getenv('HOST', '0.0.0.0')
     PORT = int(os.getenv('PORT', '5000'))
     
@@ -26,12 +29,11 @@ class Config:
         KEY_FILE = os.path.join(BASE_DIR, KEY_FILE)
     
     # База данных
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DB_NAME = os.getenv('DB_NAME', 'workshop.db')
     DB_PATH = os.path.join(BASE_DIR, DB_NAME)
     DB_BACKUP_DIR = os.path.join(BASE_DIR, os.getenv('DB_BACKUP_DIR', 'backups'))
     
-    # Оптимизация производительности (Desktop полные возможности)
+    # Оптимизация производительности (Desktop версия)
     MAX_CONNECTIONS = int(os.getenv('MAX_CONNECTIONS', '10'))
     THREAD_POOL_SIZE = int(os.getenv('THREAD_POOL_SIZE', '5'))
     CACHE_SIZE = int(os.getenv('CACHE_SIZE_MB', '64')) * 1024 * 1024
@@ -48,7 +50,7 @@ class Config:
     YOOKASSA_SECRET = os.getenv('YOOKASSA_SECRET', 'YOUR_YOOKASSA_SECRET')
     CDEK_API_KEY = os.getenv('CDEK_API_KEY', 'YOUR_CDEK_API_KEY')
     
-    # AI Прогнозирование (включено для Desktop по умолчанию)
+    # AI Прогнозирование (включено для Desktop)
     AI_PROGNOSIS = os.getenv('AI_PROGNOSIS_ENABLED', 'True').lower() in ('true', '1', 'yes')
     
     # Скидки (пороги и проценты)
@@ -85,3 +87,6 @@ class Config:
 
 # Глобальный экземпляр конфигурации
 config = Config()
+
+# Добавляем BASE_DIR в config для совместимости
+config.BASE_DIR = BASE_DIR

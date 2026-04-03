@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
+# Базовая директория
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 class Config:
     """Класс конфигурации приложения для Raspberry Pi"""
     
@@ -26,7 +29,6 @@ class Config:
         KEY_FILE = os.path.join(BASE_DIR, KEY_FILE)
     
     # База данных
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DB_NAME = os.getenv('DB_NAME', 'workshop.db')
     DB_PATH = os.path.join(BASE_DIR, DB_NAME)
     DB_BACKUP_DIR = os.path.join(BASE_DIR, os.getenv('DB_BACKUP_DIR', 'backups'))
@@ -85,3 +87,6 @@ class Config:
 
 # Глобальный экземпляр конфигурации
 config = Config()
+
+# Добавляем BASE_DIR в config для совместимости
+config.BASE_DIR = BASE_DIR
