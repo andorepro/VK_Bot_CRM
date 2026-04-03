@@ -774,23 +774,147 @@ async function loadDetailedAnalytics() {
 // ==================== AI PREDICTIONS ====================
 async function loadAIPredictions() {
   try {
-    const res = await fetch('/api/ai/predictions');
+    const res = await fetch('/api/analytics/forecast');
     const data = await res.json();
 
-    if (data?.prediction) {
+    if (data && data.forecast && data.forecast.length > 0) {
+      // Отображаем прогноз выручки
       document.getElementById('ai-prediction-value').textContent =
-        data.prediction.prediction.toFixed(2) + '₽';
-      const trend = data.prediction.trend;
+        data.monthly_prediction.toFixed(2) + '₽';
+      
+      const trendDesc = data.trend_description || '➡️ Стабильно';
       document.getElementById('ai-prediction-trend').innerHTML =
-        `Тренд: ${trend==='up'?'📈 Рост':trend==='down'?'📉 Падение':'➡️ Стабильно'}`;
+        `Тренд: ${trendDesc}`;
+      
       document.getElementById('ai-confidence').textContent =
-        `Уверенность: ${(data.prediction.confidence*100).toFixed(0)}%`;
+        `Уверенность: ${data.confidence}%`;
+      
+      // Обновляем расширенную информацию о прогнозе
+      updateForecastDetails(data);
+      
     } else {
       document.getElementById('ai-prediction-value').textContent = 'Недостаточно данных';
       document.getElementById('ai-prediction-trend').textContent = '';
       document.getElementById('ai-confidence').textContent = '';
     }
-  } catch(e) { console.error('Load AI error:', e); }
+  } catch(e) { 
+    console.error('Load AI forecast error:', e);
+    document.getElementById('ai-prediction-value').textContent = 'Ошибка загрузки';
+  }
+}
+
+// Обновление деталей прогноза
+function updateForecastDetails(data) {
+  const detailsContainer = document.getElementById('forecast-details');
+  if (!detailsContainer) return;
+  
+  const metrics = data.metrics || {};
+  const historical = data.historical_data || {};
+  
+  detailsContainer.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:15px;">
+      <div class="stat-card" style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:12px;border-radius:10px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:5px;">Прогноз на неделю</div>
+        <div style="font-size:18px;font-weight:bold;color:#4fc3f7">${(data.weekly_prediction||0).toFixed(0)}₽</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:12px;border-radius:10px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:5px;">Средний чек</div>
+        <div style="font-size:18px;font-weight:bold;color:#4caf50">${(historical.avg_daily_revenue||0).toFixed(0)}₽</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:12px;border-radius:10px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:5px;">R² точность</div>
+        <div style="font-size:18px;font-weight:bold;color:#ff9800">${(metrics.r_squared||0)*100.toFixed(0)}%</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:12px;border-radius:10px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:5px;">Дней анализа</div>
+        <div style="font-size:18px;font-weight:bold;color:#9c27b0">${historical.days_analyzed||0}</div>
+      </div>
+    </div>
+    
+    <div style="margin-top:20px;">
+      <h4 style="color:#eaeaea;margin-bottom:10px;font-size:14px;">📊 График прогноза на 30 дней</h4>
+      <canvas id="forecastChart" height="100"></canvas>
+    </div>
+  `;
+  
+  // Рисуем график прогноза
+  renderForecastChart(data.forecast);
+}
+
+let forecastChartInstance = null;
+
+function renderForecastChart(forecastData) {
+  const ctx = document.getElementById('forecastChart');
+  if (!ctx) return;
+  
+  if (forecastChartInstance) {
+    forecastChartInstance.destroy();
+  }
+  
+  const labels = forecastData.slice(0, 14).map(d => {
+    const date = new Date(d.date);
+    return `${date.getDate()}.${date.getMonth()+1}`;
+  });
+  
+  const values = forecastData.slice(0, 14).map(d => d.predicted_revenue);
+  
+  forecastChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Прогноз выручки (₽)',
+        data: values,
+        borderColor: '#4fc3f7',
+        backgroundColor: 'rgba(79, 195, 247, 0.1)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.4,
+        pointRadius: 3,
+        pointHoverRadius: 5
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: '#eaeaea', font: { size: 11 } }
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: 'rgba(30, 30, 50, 0.95)',
+          titleColor: '#4fc3f7',
+          bodyColor: '#eaeaea',
+          borderColor: '#4fc3f7',
+          borderWidth: 1,
+          callbacks: {
+            label: function(context) {
+              return context.parsed.y.toFixed(2) + ' ₽';
+            }
+          }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: false,
+          grid: { color: '#2a2a4a' },
+          ticks: { 
+            color: '#aaa',
+            callback: function(value) {
+              return value.toLocaleString('ru-RU') + '₽';
+            }
+          }
+        },
+        x: {
+          grid: { color: '#2a2a4a' },
+          ticks: { color: '#aaa' }
+        }
+      }
+    }
+  });
 }
 
 // ==================== INVENTORY ====================
