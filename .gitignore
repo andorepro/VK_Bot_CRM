@@ -1,6 +1,1 @@
-# Examples and documentation
-RUNNING.md
-
-Wait, I need to reconsider this. The RUNNING.md file is likely a source/documentation file that should be tracked, not ignored. Looking at the file changes again, there are only source files (.md, .py, .css) and no build artifacts, dependencies, or temporary files that would warrant adding anything to .gitignore.
-
-(empty — output nothing)
+Nothing needs to be added to .gitignore since only a README.md file was added, which is a source/config file and should not be ignored.
