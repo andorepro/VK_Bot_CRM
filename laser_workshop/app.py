@@ -311,6 +311,17 @@ class ConnectionPool:
 # Инициализация пула соединений
 db_pool = ConnectionPool(DB_PATH, MAX_CONNECTIONS)
 
+def get_db():
+    """Получить соединение с БД из пула"""
+    # Создаём новое соединение напрямую (пул используется через context manager)
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
+    conn.execute('PRAGMA cache_size=-64000')
+    return conn
+
 # ==================== КЭШИРОВАНИЕ ====================
 class LRUCache:
     """LRU кэш с TTL для часто используемых данных"""
